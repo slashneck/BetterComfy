@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+setup/bin/
+setup/obj/
+.vs/
+*.user
+HANDOFF.md

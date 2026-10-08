@@ -1,0 +1,781 @@
+"""Better Comfy's window: the rail on the left, the pages, the ComfyUI status and the queue at the top, toasts, the
+tray icon, and what happens when the queue is done."""
+import os
+import sys
+import threading
+
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QImage, QKeySequence,
+                           QPalette, QShortcut)
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDialog, QHBoxLayout,
+                               QMainWindow, QScrollArea, QSlider, QStyleFactory, QMenu, QMessageBox,
+                               QSystemTrayIcon, QVBoxLayout, QWidget)
+
+from . import comfy, icons, media, system, theme as T
+from .config import APP_ID, APP_NAME, BASE, VERSION, cfg, resource
+from .gallery_page import GalleryPage
+from .history import History
+from .image_page import ImagePage
+from .jobs import Queue
+from .link import Link
+from .loras_page import LorasPage
+from .queue_page import QueuePage
+from .settings_page import SettingsPage
+from .video_page import VideoPage
+from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, label
+
+PAGES = [("image", "Image", "image"), ("video", "Video", "video"), ("queue", "Queue", "queue"),
+         ("gallery", "Gallery", "gallery"), ("loras", "LoRAs", "lora")]
+BOTTOM = [("settings", "Settings", "settings")]
+
+
+class Countdown(QDialog):
+    """'Shutting down in 30 s' - with Cancel."""
+
+    def __init__(self, parent, what, seconds=30):
+        super().__init__(parent)
+        self.setWindowTitle(APP_NAME)
+        self.setModal(True)
+        self.left = seconds
+        self.what = what
+        v = QVBoxLayout(self)
+        v.setContentsMargins(26, 22, 26, 20)
+        v.setSpacing(12)
+        v.addWidget(label("The queue is done", "H2"))
+        self.msg = label("", "Muted")
+        v.addWidget(self.msg)
+        h = QHBoxLayout()
+        h.addStretch(1)
+        h.addWidget(button("Cancel", self.reject, None))
+        h.addWidget(button("Now", self.accept, "Accent"))
+        v.addLayout(h)
+        self.t = QTimer(self, interval=1000, timeout=self._tick)
+        self.t.start()
+        self._tick(first=True)
+
+    def _tick(self, first=False):
+        if not first:
+            self.left -= 1
+        if self.left <= 0:
+            self.t.stop()
+            self.accept()
+            return
+        self.msg.setText(f"{self.what} in {self.left} seconds.")
+
+
+class TopBar(QWidget):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.setFixedHeight(64)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(28, 10, 20, 6)
+        h.setSpacing(12)
+        self.title = label("", "H1")
+        self.sub = label("", "Faint")
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        col.addWidget(self.title)
+        col.addWidget(self.sub)
+        h.addLayout(col)
+        h.addStretch(1)
+        # comfy pill
+        self.pill = QWidget()
+        self.pill.setObjectName("Pill")
+        self.pill.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.pill.setStyleSheet(f"#Pill {{ background: {T.SURFACE}; border: 1px solid {T.BORDER}; border-radius: 17px; }}"
+                                f"#Pill:hover {{ border-color: {T.BORDER_HI}; }}")
+        self.pill.setCursor(Qt.CursorShape.PointingHandCursor)
+        ph = QHBoxLayout(self.pill)
+        ph.setContentsMargins(10, 5, 14, 5)
+        ph.setSpacing(6)
+        self.dot = PulseDot(9)
+        self.ptext = label("Looking for ComfyUI…")
+        self.ptext.setStyleSheet("font-size: 12px;")
+        self.vram = label("", "Faint")
+        ph.addWidget(self.dot)
+        ph.addWidget(self.ptext)
+        ph.addWidget(self.vram)
+        self.pill.mousePressEvent = lambda e: self.win.comfy_menu(self.pill.mapToGlobal(QPoint(0, self.pill.height() + 4)))
+        h.addWidget(self.pill)
+        # queue
+        self.qw = QWidget()
+        self.qw.setObjectName("Pill2")
+        self.qw.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.qw.setStyleSheet(f"#Pill2 {{ background: {T.SURFACE}; border: 1px solid {T.BORDER}; border-radius: 17px; }}"
+                              f"#Pill2:hover {{ border-color: {T.BORDER_HI}; }}")
+        self.qw.setCursor(Qt.CursorShape.PointingHandCursor)
+        qh = QHBoxLayout(self.qw)
+        qh.setContentsMargins(4, 2, 14, 2)
+        qh.setSpacing(6)
+        self.ring = Ring(30)
+        self.qtext = label("Queue empty")
+        self.qtext.setStyleSheet("font-size: 12px;")
+        qh.addWidget(self.ring)
+        qh.addWidget(self.qtext)
+        self.qw.mousePressEvent = lambda e: self.win.go("queue")
+        h.addWidget(self.qw)
+        self.upd = button("  Update", lambda: self.win.update_now(), "Accent", "download")
+        self.upd.setStyleSheet("QPushButton#Accent { border-radius: 17px; padding: 7px 14px; }")
+        self.upd.hide()
+        h.insertWidget(h.count() - 2, self.upd)
+
+    def set_page(self, page):
+        self.title.setText(page.title)
+        self.sub.setText(page.subtitle)
+
+
+class Window(QMainWindow):
+    _joined = Signal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(QIcon(resource("assets", "icon.ico")))
+        self.history = History()
+        self.history.compact()
+        self.link = Link()
+        self.queue = Queue(self.link, self.history)
+        from .update_service import UpdateService
+        self.updates = UpdateService()
+        root = QWidget()
+        root.setObjectName("Root")
+        self.setCentralWidget(root)
+        h = QHBoxLayout(root)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        self.rail = NavRail(PAGES, BOTTOM)
+        self.rail.changed.connect(self.go)
+        h.addWidget(self.rail)
+        main = QWidget()
+        main.setObjectName("Main")
+        mv = QVBoxLayout(main)
+        mv.setContentsMargins(0, 0, 0, 0)
+        mv.setSpacing(0)
+        self.top = TopBar(self)
+        mv.addWidget(self.top)
+        line = QWidget()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {T.BORDER};")
+        mv.addWidget(line)
+        self.stack = FadeStack()
+        mv.addWidget(self.stack, 1)
+        h.addWidget(main, 1)
+        self.pages = {}
+        for key, cls in (("image", ImagePage), ("video", VideoPage), ("queue", QueuePage), ("gallery", GalleryPage),
+                         ("loras", LorasPage), ("settings", SettingsPage)):
+            pg = cls(self)
+            self.pages[key] = pg
+            self.stack.addWidget(pg)
+            if hasattr(pg, "toast") and hasattr(pg.toast, "connect"):
+                pg.toast.connect(self.toast)
+        self.pages["settings"].accent_changed.connect(self.apply_accent)
+        self.toasts = Toasts(root)
+        from .viewer import Viewer
+        self.viewer = Viewer(root)
+        self.link.status.connect(self._status)
+        self.queue.changed.connect(self._queue)
+        self.queue.job_changed.connect(lambda _j: self._queue())
+        self.queue.finished.connect(self._queue_done)
+        self.queue.output.connect(self._output)
+        self.queue.done.connect(self._job_done)
+        self._joined.connect(self._join_done)
+        self._views = []
+        for i, (k, _t, _i) in enumerate(PAGES + BOTTOM):
+            QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda k=k: self.go(k))
+        self._tray()
+        self._restore()
+        self.go(cfg.get("start_page") or "image", animate=False)
+        self.link.begin()
+        self.updates.changed.connect(self._update_state)
+        self.updates.begin()
+        self._queue()
+        if self.queue.paused and self.queue.pending():
+            QTimer.singleShot(1200, lambda: self.toast(f"{len(self.queue.pending())} jobs from last time are waiting - "
+                                                       "Resume them on the Queue page.", "info"))
+
+    # ---------------------------------------------------------------- navigation
+    def go(self, key, animate=True):
+        if key not in self.pages:
+            return
+        pg = self.pages[key]
+        self.rail.select(key)
+        if animate:
+            self.stack.switch(self.stack.indexOf(pg))
+        else:
+            self.stack.setCurrentWidget(pg)
+        self.top.set_page(pg)
+
+    def toast(self, text, kind="info"):
+        self.toasts.show_toast(text, kind)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, "toasts"):
+            self.toasts.relayout()
+
+    # ---------------------------------------------------------------- comfy status
+    def _status(self, st):
+        s = st.get("state")
+        if s == "running":
+            self.top.dot.set(T.GOOD)
+            gpu = st.get("gpu")
+            self.top.ptext.setText("ComfyUI")
+            self.top.vram.setText(f"{gpu[0]}  ·  {gpu[1] - gpu[2]:.1f} / {gpu[1]:.0f} GB" if gpu else st.get("version", ""))
+            self.top.pill.setToolTip(f"ComfyUI {st.get('version', '')} at {st.get('url')}")
+        elif s == "starting":
+            self.top.dot.set(T.WARN, pulse=True)
+            self.top.ptext.setText("Starting ComfyUI…")
+            self.top.vram.setText("")
+        elif s == "missing":
+            self.top.dot.set(T.BAD)
+            self.top.ptext.setText("ComfyUI not found")
+            self.top.vram.setText("")
+        else:
+            self.top.dot.set(T.TEXT3)
+            self.top.ptext.setText("ComfyUI off")
+            self.top.vram.setText("starts when you generate" if cfg.get("auto_start") else "")
+
+    def _update_state(self):
+        u = self.updates
+        b = self.top.upd
+        if u.state == "ready" and u.info:
+            b.setText(f"  Update to {u.info['version']}")
+            b.setToolTip("Restarts Better Comfy with the new version (also happens by itself when you close it)")
+            b.show()
+        elif u.state == "available" and u.info:
+            b.setText(f"  {u.info['version']} is out")
+            b.setToolTip("A new version is on GitHub")
+            b.show()
+        else:
+            b.hide()
+        self.pages["settings"].update_state()
+
+    def update_now(self):
+        u = self.updates
+        if u.state == "available" and u.info:
+            QDesktopServices.openUrl(QUrl(u.info["page"]))
+            return
+        if u.state != "ready":
+            return
+        if self.queue.running():
+            if QMessageBox.question(self, APP_NAME, "Something is being made right now. Stop it and update?") != \
+                    QMessageBox.StandardButton.Yes:
+                return
+        if u.install(restart=True):
+            self._updating = True
+            self._quit()
+
+    def comfy_menu(self, pos):
+        m = QMenu(self)
+        if self.link.running():
+            m.addAction(icons.icon("power", "#FF8A8A", 16), "Stop ComfyUI").triggered.connect(self.link.stop)
+            m.addAction(icons.icon("chip", "#A1A1AA", 16), "Free graphics memory").triggered.connect(self.free_vram)
+            m.addAction(icons.icon("external", "#A1A1AA", 16), "Open ComfyUI in the browser").triggered.connect(
+                lambda: QDesktopServices.openUrl(QUrl(self.link.url())) if comfy.is_local(self.link.url()) else None)
+        else:
+            a = m.addAction(icons.icon("power", T.GOOD, 16), "Start ComfyUI")
+            a.triggered.connect(self._start)
+            a.setEnabled(self.link.install() is not None and self.link.state.get("state") != "starting")
+        m.addSeparator()
+        m.addAction(icons.icon("refresh", "#A1A1AA", 16), "Read the model lists again").triggered.connect(
+            self.link.refresh_models)
+        m.addAction(icons.icon("settings", "#A1A1AA", 16), "ComfyUI settings…").triggered.connect(
+            lambda: self.go("settings"))
+        m.exec(pos)
+
+    def _start(self):
+        try:
+            self.link.start()
+        except Exception as ex:
+            QMessageBox.warning(self, "ComfyUI", str(ex))
+
+    def free_vram(self):
+        url = self.link.url()
+        threading.Thread(target=lambda: comfy.Client(url).free(), daemon=True).start()
+        self.toast("Graphics memory freed.", "ok")
+
+    # ---------------------------------------------------------------- queue
+    def _queue(self):
+        q = self.queue
+        n = q.active_count()
+        f, left = q.overall()
+        self.top.ring.set(f if q.running() else 0.0, n)
+        if not n:
+            self.top.qtext.setText("Queue empty")
+        else:
+            cur = q.running()
+            t = f"{n} in queue" + ("  ·  paused" if q.paused else "")
+            if left:
+                t += f"  ·  {human_time(left)}"
+            self.top.qtext.setText(t)
+            if cur:
+                self.top.qw.setToolTip(f"{cur.get('title')}\n{cur.get('text')}")
+        if self.tray:
+            self.tray.setToolTip(f"{APP_NAME}  ·  " + (f"{n} in queue" if n else "idle"))
+            self.pause_act.setText("Resume queue" if q.paused else "Pause queue")
+
+    def _output(self, jid, e):
+        pass
+
+    def _queue_done(self, made):
+        if not made:
+            return
+        if cfg.get("sound_done"):
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            except Exception:
+                QApplication.beep()
+        if cfg.get("notify_done") and self.tray and not self.isActiveWindow():
+            self.tray.showMessage(APP_NAME, "The queue is done.", QIcon(resource("assets", "icon.ico")), 5000)
+        self.toast("The queue is done.", "ok")
+        if cfg.get("free_after_queue"):
+            self.free_vram()
+        what = cfg.get("after_queue", "nothing")
+        if what == "free":
+            self.free_vram()
+        elif what == "stop_comfy":
+            self.link.stop()
+            self.toast("ComfyUI stopped.", "info")
+        elif what in ("close", "sleep", "shutdown"):
+            text = {"close": "Better Comfy closes", "sleep": "The PC goes to sleep", "shutdown": "The PC shuts down"}[what]
+            self.showNormal()
+            self.raise_()
+            d = Countdown(self, text, 30)
+            if d.exec() != QDialog.DialogCode.Accepted:
+                self.toast("Cancelled.", "info")
+                return
+            if what == "close":
+                self._quit()
+            elif what == "sleep":
+                system.sleep_pc()
+            else:
+                self._shutdown_cleanup()
+                system.shutdown_pc()
+                self._quit()
+
+    # ---------------------------------------------------------------- results
+    def _job_done(self, jid):
+        j = self.queue.job(jid)
+        if j and j["kind"] == "image" and j["params"].get("variants"):
+            self.open_compare(jid)
+
+    def open_compare(self, group):
+        from .tools import CompareView
+        items = sorted([e for e in self.history.items if e.get("group") == group], key=lambda e: e.get("created", ""))
+        if not items:
+            self.toast("The pictures of this comparison are not there any more.", "warn")
+            return
+        v = CompareView(self, items, "Comparison")
+        v.use.connect(lambda e: self.result_action("reuse", e))
+        v.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        v.show()
+        self._views = [x for x in self._views if x.isVisible()] + [v]
+
+    def _queue_image(self, params, title, thumb=None):
+        from . import workflows as W
+        ip = self.pages["image"]
+        kind = self.link.kind_of(params.get("ckpt"), params.get("model_src", "ckpt"))
+        src = media.image_size(params.get("source_image")) if params.get("source_image") else None
+        pl = W.image_plan(params, kind, src)
+        self.queue.add("image", params, title, thumb=thumb, units=W.work_units("image", pl, params.get("count", 1)),
+                       ckpt_kind=kind)
+        ip.bar.flash()
+
+    def view(self, entries, idx=0, on_move=None):
+        self.viewer.open(entries, idx, on_move)
+
+    def result_action(self, key, e, page=None):
+        if key == "view":
+            items = self.history.recent(e.get("kind"), 2000)
+            ids = [x["id"] for x in items]
+            self.view(items, ids.index(e["id"]) if e["id"] in ids else 0)
+            return
+        if key == "upscale":
+            from .tools import UpscaleDialog
+            if e.get("kind") != "image":
+                return
+            p = dict(e.get("params") or {})
+            if not p.get("ckpt"):
+                p.update({k: v for k, v in self.pages["image"].p.items() if k in ("ckpt", "model_src", "family",
+                                                                                   "te1", "te2", "evae")})
+                e = dict(e, params=p)
+            d = UpscaleDialog(self, e, bool(self.link.lists.get("upscale")))
+            if d.exec() and d.result_params:
+                self._queue_image(d.result_params, "Upscale: " + os.path.basename(e["file"]), e.get("thumb"))
+                self.toast("Upscale queued.", "ok")
+            return
+        if key == "inpaint":
+            from .tools import MaskEditor
+            if e.get("kind") != "image":
+                return
+            p = dict(e.get("params") or {})
+            if not p.get("ckpt"):
+                p.update({k: v for k, v in self.pages["image"].p.items() if k in ("ckpt", "model_src", "family",
+                                                                                   "te1", "te2", "evae")})
+                e = dict(e, params=p)
+            d = MaskEditor(self, e)
+            if d.exec() and d.result_params:
+                self._queue_image(d.result_params, "Edit: " + (d.result_params.get("prompt") or "")[:60], e.get("thumb"))
+                self.toast("Edit queued - the new version appears next to the old one.", "ok")
+            return
+        if key == "compare":
+            if e.get("group"):
+                self.open_compare(e["group"])
+            return
+        if key == "animate":
+            self.pages["video"].set_start(e["file"])
+            self.go("video")
+        elif key == "reuse":
+            pg = self.pages["image" if e["kind"] == "image" else "video"]
+            pg.use_settings(e.get("params") or {})
+            self.go("image" if e["kind"] == "image" else "video")
+        elif key == "start":
+            self.pages["image"].set_start(e["file"])
+            self.toast("Set as the start picture - lower 'Change' keeps more of it.", "ok")
+        elif key == "copy":
+            QApplication.clipboard().setImage(QImage(e["file"]))
+            self.toast("Picture copied.", "ok")
+        elif key == "folder":
+            system.reveal(e["file"])
+        elif key == "delete":
+            self.delete_entries([e])
+        elif key == "extend":
+            try:
+                fr = media.last_frame(e["file"])
+                if fr is None:
+                    raise RuntimeError("no frames")
+                d = os.path.join(BASE, "frames")
+                os.makedirs(d, exist_ok=True)
+                p = media.unique(os.path.join(d, os.path.splitext(os.path.basename(e["file"]))[0] + "_last.png"))
+                from PIL import Image
+                Image.fromarray(fr).save(p)
+            except Exception as ex:
+                QMessageBox.warning(self, "Extend", f"Could not read the last frame:\n{ex}")
+                return
+            vp = self.pages["video"]
+            params = dict(e.get("params") or {})
+            params.update(start_image=p, loop="free", seed=-1, join_with=e["file"], join=True,
+                          join_name=os.path.basename(e["file"]))
+            vp.load(params)
+            self.go("video")
+            self.toast("The last frame is the new start - describe what happens next.", "ok")
+        elif key == "gif":
+            self._save_gif(e)
+
+    def _save_gif(self, e):
+        from PySide6.QtWidgets import QFileDialog
+        out, _ = QFileDialog.getSaveFileName(self, "Save as GIF", os.path.splitext(e["file"])[0] + ".gif", "GIF (*.gif)")
+        if not out:
+            return
+        self.toast("Making the GIF…", "info")
+
+        def work():
+            try:
+                frames, fps = media.read_video(e["file"], max_h=100000)
+                media.write_gif(frames, fps, out)
+                QTimer.singleShot(0, lambda: self.toast("GIF saved.", "ok"))
+            except Exception as ex:
+                msg = str(ex)
+                QTimer.singleShot(0, lambda: self.toast(f"GIF failed: {msg}", "error"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def join_entries(self, entries):
+        """Videos one after the other as one video (oldest first)."""
+        vids = sorted([e for e in entries if e.get("kind") == "video"], key=lambda e: e.get("created", ""))
+        if len(vids) < 2:
+            self.toast("Pick two or more videos to join.", "warn")
+            return
+        self.toast(f"Joining {len(vids)} videos…", "info")
+        from .jobs import _out_dir
+
+        def work():
+            try:
+                frames, fps = media.join_clips([e["file"] for e in vids])
+                ext = os.path.splitext(vids[0]["file"])[1].lstrip(".") or "mp4"
+                path = media.unique(os.path.join(_out_dir("video"), f"BC_joined_{len(vids)}.{ext}"))
+                media.write_video(frames, fps, path, ext)
+                thumb = media.thumbnail(frames[0], os.path.join(BASE, "thumbs", os.path.basename(path) + ".jpg"))
+                e = {"kind": "video", "file": path, "thumb": thumb, "w": frames[0].shape[1], "h": frames[0].shape[0],
+                     "seed": vids[0].get("seed"), "fps": fps, "frames": len(frames),
+                     "seconds": round(len(frames) / fps, 2), "prompt": vids[0].get("prompt", ""),
+                     "params": vids[0].get("params") or {}, "joined": True, "loop": "free"}
+                self._joined.emit(e)
+            except Exception as ex:
+                self._joined.emit({"error": str(ex)})
+        threading.Thread(target=work, daemon=True).start()
+
+    def _join_done(self, e):
+        if e.get("error"):
+            self.toast("Joining failed: " + e["error"], "error")
+            return
+        self.history.add(e)
+        self.toast(f"Joined: {e['seconds']} s.", "ok")
+
+    def animate_entries(self, entries):
+        pics = [e["file"] for e in entries if e.get("kind") == "image"]
+        if pics:
+            self.pages["video"].batch(pics)
+
+    def delete_entries(self, entries):
+        if not entries:
+            return
+        if cfg.get("confirm_delete"):
+            n = len(entries)
+            if QMessageBox.question(self, "Delete", f"Move {'this' if n == 1 else f'these {n}'} to the recycle bin?") \
+                    != QMessageBox.StandardButton.Yes:
+                return
+        for e in entries:
+            files = [e.get("file"), e.get("thumb"), (e.get("file") or "") + ".json"]
+            system.recycle([f for f in files[:1] if f])
+            for f in files[1:]:
+                try:
+                    if f and os.path.isfile(f) and f.startswith(BASE):
+                        os.remove(f)
+                    elif f and f.endswith(".json") and os.path.isfile(f):
+                        system.recycle([f])
+                except OSError:
+                    pass
+            self.history.remove(e["id"])
+
+    def show_entry(self, eid):
+        e = self.history.get(eid)
+        if not e:
+            return
+        self.go("gallery")
+        g = self.pages["gallery"]
+        g.fill()
+        g.show(eid)
+
+    def add_lora(self, where, name):
+        pg = self.pages["image" if where == "image" else "video"]
+        pg.loras.add(name)
+        self.go(where)
+        self.toast(f"Added {os.path.splitext(os.path.basename(name))[0]}.", "ok")
+
+    # ---------------------------------------------------------------- look
+    def apply_accent(self):
+        T.set_accent(cfg.get("accent"))
+        _palette(QApplication.instance())
+        QApplication.instance().setStyleSheet(T.qss())
+        for pg in ("image", "video"):
+            self.pages[pg].bar.refresh_style()
+        for w in QApplication.instance().allWidgets():
+            w.update()
+
+    # ---------------------------------------------------------------- tray / window
+    def _tray(self):
+        self.tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.pause_act = QAction(self)
+            return
+        self.tray = QSystemTrayIcon(QIcon(resource("assets", "icon.ico")), self)
+        m = QMenu()
+        m.addAction("Show Better Comfy").triggered.connect(self._show)
+        self.pause_act = m.addAction("Pause queue")
+        self.pause_act.triggered.connect(lambda: self.queue.resume() if self.queue.paused else self.queue.pause())
+        m.addSeparator()
+        m.addAction("Quit").triggered.connect(self._quit)
+        self.tray.setContextMenu(m)
+        self.tray.activated.connect(lambda r: self._show() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
+        self.tray.show()
+
+    def _show(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _restore(self):
+        w = cfg.get("window") or {}
+        scr = QApplication.primaryScreen().availableGeometry()
+        if w.get("geo"):
+            x, y, ww, hh = w["geo"]
+            r = QRect(x, y, ww, hh)
+            if scr.intersects(r):
+                self.setGeometry(r)
+            else:
+                self.resize(min(1560, scr.width() - 80), min(980, scr.height() - 80))
+        else:
+            self.resize(min(1560, scr.width() - 80), min(980, scr.height() - 80))
+            self.move(scr.center() - self.rect().center())
+        if w.get("max"):
+            QTimer.singleShot(0, self.showMaximized)
+
+    def _save_window(self):
+        g = self.normalGeometry() if self.isMaximized() else self.geometry()
+        cfg.set("window", {"geo": [g.x(), g.y(), g.width(), g.height()], "max": self.isMaximized()})
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        system.dark_title_bar(self.winId())
+
+    def closeEvent(self, e):
+        if getattr(self, "_quitting", False):
+            e.accept()
+            return
+        if cfg.get("close_to_tray") and self.tray:
+            e.ignore()
+            self.hide()
+            self.tray.showMessage(APP_NAME, "Still here - the queue keeps working.", QIcon(resource("assets", "icon.ico")),
+                                  2500)
+            return
+        if self.queue.active_count():
+            r = QMessageBox.question(self, APP_NAME, f"{self.queue.active_count()} jobs are still in the queue. Close "
+                                                     "anyway? (Waiting ones are kept for next time.)")
+            if r != QMessageBox.StandardButton.Yes:
+                e.ignore()
+                return
+        self._quit()
+        e.accept()
+
+    def _shutdown_cleanup(self):
+        self._save_window()
+        self.pages["image"]._save()
+        cfg.set("video_state", dict(self.pages["video"].p))
+        if self.queue.worker is not None:
+            self.queue.worker.stop()
+        self.queue._save()
+        if cfg.get("stop_on_exit") and comfy.anything_started():
+            comfy.stop_started()
+
+    def _quit(self):
+        self._quitting = True
+        self._shutdown_cleanup()
+        if not getattr(self, "_updating", False) and self.updates.staged:
+            self.updates.install(restart=False)          # a downloaded update goes in when Better Comfy closes
+        if self.tray:
+            self.tray.hide()
+        QApplication.instance().quit()
+
+
+# ==================================================================================================== start
+
+class WheelGuard(QObject):
+    """The mouse wheel never changes a setting it happens to be over - it scrolls the page instead."""
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.Type.Wheel and isinstance(obj, (QComboBox, QAbstractSpinBox, QSlider)):
+            w = obj.parentWidget()
+            while w is not None and not isinstance(w, QAbstractScrollArea):
+                w = w.parentWidget()
+            if w is not None:
+                sb = w.verticalScrollBar()
+                sb.setValue(sb.value() - int(e.angleDelta().y() / 120 * max(20, sb.singleStep()) * 3))
+            return True
+        return False
+
+
+def _palette(app):
+    """A dark base under the stylesheet - nothing ever flashes white."""
+    app.setStyle(QStyleFactory.create("Fusion"))
+    pal = QPalette()
+    for role, col in ((QPalette.ColorRole.Window, T.BG), (QPalette.ColorRole.WindowText, T.TEXT),
+                      (QPalette.ColorRole.Base, T.FIELD), (QPalette.ColorRole.AlternateBase, T.SURFACE),
+                      (QPalette.ColorRole.Text, T.TEXT), (QPalette.ColorRole.Button, T.SURFACE2),
+                      (QPalette.ColorRole.ButtonText, T.TEXT), (QPalette.ColorRole.ToolTipBase, T.SURFACE2),
+                      (QPalette.ColorRole.ToolTipText, T.TEXT), (QPalette.ColorRole.PlaceholderText, T.TEXT3),
+                      (QPalette.ColorRole.Mid, T.BORDER_HI), (QPalette.ColorRole.Dark, T.PANEL),
+                      (QPalette.ColorRole.Light, T.SURFACE3)):
+        pal.setColor(role, QColor(col))
+    pal.setColor(QPalette.ColorRole.Highlight, T.accent())
+    pal.setColor(QPalette.ColorRole.HighlightedText, T.on_accent())
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(T.TEXT3))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(T.TEXT3))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(T.TEXT3))
+    app.setPalette(pal)
+
+
+def _fonts(app):
+    fams = set(QFontDatabase.families())
+    for name in ("Segoe UI Variable Text", "Segoe UI Variable", "Inter", "Segoe UI"):
+        if name in fams:
+            f = QFont(name, 10)
+            f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+            f.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+            app.setFont(f)
+            return
+
+
+def _single_instance():
+    """Only one Better Comfy: a second start brings the first one forward."""
+    name = "BetterComfy-" + (os.environ.get("USERNAME") or "user")
+    s = QLocalSocket()
+    s.connectToServer(name)
+    if s.waitForConnected(300):
+        s.write(b"show")
+        s.flush()
+        s.waitForBytesWritten(300)
+        return None
+    QLocalServer.removeServer(name)
+    srv = QLocalServer()
+    srv.listen(name)
+    return srv
+
+
+def snapshot(win, folder):
+    """Renders every page to a PNG (for checking the look without clicking)."""
+    os.makedirs(folder, exist_ok=True)
+    for key in list(win.pages):
+        win.go(key, animate=False)
+        QApplication.processEvents()
+        win.grab().save(os.path.join(folder, f"{key}.png"))
+        sc = getattr(win.pages[key], "scroll", None)
+        if isinstance(sc, QScrollArea):
+            body = sc.widget()
+            body.resize(sc.viewport().width(), body.sizeHint().height())
+            QApplication.processEvents()
+            body.grab().save(os.path.join(folder, f"{key}_panel.png"))
+
+
+def main():
+    from . import updater
+    argv = sys.argv[1:]
+    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    comfy.quiet_errors()
+    system.app_user_model_id()
+    app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(VERSION)
+    app.setOrganizationName(APP_ID)
+    app.setWindowIcon(QIcon(resource("assets", "icon.ico")))
+    app.setQuitOnLastWindowClosed(False)
+    snap = None
+    if "--snapshot" in sys.argv:
+        snap = sys.argv[sys.argv.index("--snapshot") + 1]
+    if snap:
+        cfg.save = lambda: None                       # a look-check never changes the user's settings
+        cfg.data["animations"] = False
+    srv = None if snap else _single_instance()
+    if srv is None and not snap:
+        return 0
+    T.set_accent(cfg.get("accent"))
+    _palette(app)
+    _fonts(app)
+    app.setStyleSheet(T.qss())
+    guard = WheelGuard(app)
+    app.installEventFilter(guard)
+    win = Window()
+    if srv is not None:
+        def other():
+            c = srv.nextPendingConnection()
+            if c:
+                c.readyRead.connect(win._show)
+        srv.newConnection.connect(other)
+    win.show()
+    updater.clean_up()
+    if "--updated" in argv:
+        QTimer.singleShot(1500, lambda: win.toast(f"Updated to Better Comfy {VERSION}.", "ok"))
+    elif not cfg.get("welcomed") and not snap:
+        from .welcome import Welcome
+        QTimer.singleShot(500, lambda: (Welcome(win).exec(), win.link.installs(True), win.link.refresh_models(),
+                                        win.link.poll(), win.pages["settings"]._fill_installs(True)))
+    if snap:
+        def shoot():
+            try:
+                snapshot(win, snap)
+            finally:
+                win._quit()
+        QTimer.singleShot(2500, shoot)
+    return app.exec()
