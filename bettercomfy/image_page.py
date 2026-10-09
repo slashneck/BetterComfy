@@ -10,7 +10,7 @@ from . import assistant, jobs, media, workflows as W
 from .components import GenerateBar, LoraStack, PromptCard, ResultPane, SeedBox, UserPresets, remember_prompt
 from .config import cfg
 from .widgets import (Combo, AspectPreview, Card, ChipBox, Collapsible, ImageDrop, PresetPicker, Scroll, Segmented, Slider,
-                      ToggleRow, chip, field, hrow, icon_button, label, nice_name, quiet, set_combo, human_time)
+                      ToggleRow, button, chip, field, hrow, icon_button, label, nice_name, quiet, set_combo, human_time)
 
 
 class ImagePage(QWidget):
@@ -64,6 +64,12 @@ class ImagePage(QWidget):
         self.family.setFixedWidth(118)
         self.fam_badge = label("", "AccentBadge")
         self.model_note = label("", "Faint", wrap=True)
+        self.move_btn = button("Move it to diffusion_models", self._move_to_unet, "Ghost", "folder",
+                               "Moves the file inside your ComfyUI folder (same drive: instant)")
+        self.move_btn.hide()
+        self.parts_btn = button("Download the missing parts…", self._get_parts, "Ghost", "download",
+                                "Optional: the official files, into ComfyUI's model folders")
+        self.parts_btn.hide()
         reload_btn = icon_button("refresh", self.link.refresh_models, "Read the model lists again", size=15)
         self.parts = Collapsible("Engine parts", False, "The text encoder(s) and VAE a Flux / Qwen / Anima / Z-Image "
                                                         "model needs (found by themselves)")
@@ -86,7 +92,7 @@ class ImagePage(QWidget):
         c = Card("Model", [self.fam_badge, reload_btn])
         c.add(self.ckpt, field("Family", hrow(self.family, None), "Decides the base size, quality words and "
                                                                     "defaults. Auto reads it from the file.", label_w=60),
-              self.model_note, self.parts)
+              self.model_note, hrow(self.move_btn, self.parts_btn, None, spacing=6), self.parts)
         sc.add(c)
 
         # prompt
@@ -337,6 +343,41 @@ class ImagePage(QWidget):
         if not self.loras.items:
             self.loras.rebuild()
 
+    def _get_parts(self):
+        from .helper_ui import PartsDialog
+        fam = W.family_of(self.p, self._kind())
+        miss = W.engine_parts(fam, self.p, self.link.lists or {})[3]
+        if PartsDialog(self, fam, miss, self.link.install()).exec():
+            self.link.refresh_models()
+            self.toast.emit("Downloaded. The model lists are read again.", "ok")
+
+    def _move_to_unet(self):
+        """A model-only file (Krea 2) from checkpoints to diffusion_models, where ComfyUI's UNET loader finds it."""
+        import shutil
+        from PySide6.QtWidgets import QMessageBox
+        from . import comfy
+        ins = self.link.install()
+        name = self.p.get("ckpt")
+        src = comfy.model_path(ins, "checkpoints", name) if ins and name else None
+        if not src:
+            return
+        dst = os.path.join(comfy.sub_dir(ins, "models/diffusion_models"), os.path.basename(src))
+        if os.path.exists(dst):
+            QMessageBox.warning(self, "Move", f"There is a file of that name in diffusion_models already:\n{dst}")
+            return
+        if QMessageBox.question(self, "Move", f"Move {os.path.basename(src)} to\n{os.path.dirname(dst)}?") != \
+                QMessageBox.StandardButton.Yes:
+            return
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.move(src, dst)
+        except OSError as ex:
+            QMessageBox.warning(self, "Move", f"It could not be moved:\n{ex}")
+            return
+        self.p.update(model_src="unet", ckpt=os.path.basename(dst))
+        self.link.refresh_models()
+        self.toast.emit("Moved. It shows up as a diffusion model once the lists are read again.", "ok")
+
     def _kind(self):
         return self.link.kind_of(self.p.get("ckpt"), self.p.get("model_src", "ckpt"))
 
@@ -399,6 +440,16 @@ class ImagePage(QWidget):
             notes.append("Speed model / LoRA found: few steps and low guidance are used.")
         if kind == "other":
             notes.append("This file does not look like a picture model this app knows.")
+        move = False
+        if fam == "krea2":
+            types = (self.link.lists or {}).get("clip_types")
+            if types and "krea2" not in types:
+                notes.append("Your ComfyUI is too old for Krea 2 (it came in June 2026): update ComfyUI first, in "
+                             "Pinokio its Update button.")
+            if self.p.get("model_src") == "ckpt":
+                notes.append("This Krea 2 file is only the model itself, so it belongs in models/diffusion_models.")
+                move = True
+        self.move_btn.setVisible(move)
         eng = F["engine"]
         self.parts.setVisible(eng != "sd")
         self.clip_row.setVisible(eng == "sd")
@@ -414,6 +465,9 @@ class ImagePage(QWidget):
             if miss:
                 notes.append(f"Missing its {' and '.join(miss)} - {F['need']}.")
                 self.parts.set_open(True)
+            self.parts_btn.setVisible(bool(miss) and fam in W.PART_DOWNLOADS)
+        else:
+            self.parts_btn.setVisible(False)
         self.model_note.setText("  ".join(notes))
         self.model_note.setVisible(bool(notes))
         self.quality_tags.text.setText("Quality words" + (" (none for this family)" if not F["quality"] else ""))
@@ -452,6 +506,17 @@ class ImagePage(QWidget):
         if miss:
             self.toast.emit(f"{W.FAMILIES[fam]['name']} needs its {' and '.join(miss)} - see the Model card.", "warn")
             return
+        if p.get("init_image"):
+            from .jobs import ref_ok
+            try:
+                there = ref_ok(p["init_image"])
+            except Exception:
+                there = False
+            if not there:
+                self.init.clear()
+                self.toast.emit("The start picture was deleted, so it was taken out. Press Generate again to make it "
+                                "from the prompt only.", "warn")
+                return
         if not (p.get("prompt") or "").strip() and not p.get("init_image"):
             self.toast.emit("Write a prompt first - what should the picture show?", "warn")
             self.prompt.edit.setFocus()

@@ -44,9 +44,25 @@ FAMILIES = {
                "latent": "sd3", "clip_type": "lumina2", "te": [("qwen_3_4b", "qwen3_4b", "qwen_3_4")],
                "vae": ("ae.", "flux_vae", "flux"), "shift": 3.0, "distilled": True,
                "need": "Z-Image: qwen_3_4b in models/text_encoders, ae.safetensors in models/vae"},
+    "krea2": {"name": "Krea 2", "engine": "krea2", "base": 1024, "clip_skip": 1, "cfg": 1.0, "steps": 8,
+              "sampler": "euler", "scheduler": "simple", "quality": "", "negative": "", "neg": "zero",
+              "latent": "sd3", "clip_type": "krea2", "te": [("qwen3vl_4b", "qwen3_vl_4b", "qwen3vl")],
+              "vae": ("qwen_image_vae", "wan_2.1_vae", "wan2.1_vae", "wan_2_1_vae"), "distilled": True,
+              "need": "Krea 2: qwen3vl_4b in models/text_encoders and qwen_image_vae in models/vae"},
 }
-FAMILY_ORDER = ["sdxl", "pony", "illustrious", "sd15", "flux", "qwen", "anima", "zimage"]
-ENGINE_KINDS = ("flux", "qwen", "anima", "zimage")
+FAMILY_ORDER = ["sdxl", "pony", "illustrious", "sd15", "flux", "qwen", "anima", "zimage", "krea2"]
+# parts an engine needs that the app can fetch on request (official files, fixed checksums), by what is missing
+PART_DOWNLOADS = {
+    "krea2": {
+        "text encoder": {"folder": "models/text_encoders", "file": "qwen3vl_4b_fp8_scaled.safetensors",
+                         "size": 5242467968, "sha256": "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
+                         "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/eb1eddd3983a54678545a9b2c178c5853b30f7be/text_encoders/qwen3vl_4b_fp8_scaled.safetensors"},
+        "VAE": {"folder": "models/vae", "file": "qwen_image_vae.safetensors", "size": 253806246,
+                "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+                "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/eb1eddd3983a54678545a9b2c178c5853b30f7be/vae/qwen_image_vae.safetensors"},
+    },
+}
+ENGINE_KINDS = ("flux", "qwen", "anima", "zimage", "krea2")
 
 _FAST_WORDS = ("lightning", "hyper", "turbo", "dmd", "lcm", "lightspeed", "lightx2v", "distill", "fastwan", "4step",
                "4-step", "8step", "8-step", "rapid", "causvid", "schnell")
@@ -67,6 +83,8 @@ def model_kind(header):
         return "sdxl"
     if any(k.startswith("cond_stage_model.") for k in keys):
         return "sd15"
+    if "txtfusion.projector.weight" in j or "txtfusion.layerwise_blocks" in j:
+        return "krea2"
     if "llm_adapter" in j:
         return "anima"
     if "double_blocks." in j and "single_blocks." in j:
@@ -90,6 +108,8 @@ def name_kind(name):
     lo = (name or "").lower()
     if "wan" in lo:
         return "wan"
+    if re.search(r"krea.?2", lo):
+        return "krea2"
     for k, words in (("flux", ("flux", "schnell", "krea")), ("qwen", ("qwen",)), ("anima", ("anima",)),
                      ("zimage", ("z_image", "zimage", "z-image"))):
         if any(w in lo for w in words):
@@ -351,6 +371,8 @@ def _model(g, p, plan, lists):
     te1, te2, evae, miss = engine_parts(fam, p, lists or {})
     if miss:
         raise RuntimeError(f"{F['name']} needs its {' and '.join(miss)}. {F['need']}.")
+    if eng == "krea2" and p.get("model_src") == "ckpt":
+        raise RuntimeError("Krea 2 files belong in models/diffusion_models - the Model card can move it there.")
     if p.get("model_src") == "ckpt":
         model = [g.add("CheckpointLoaderSimple", "Loading the model", 3.0, ckpt_name=p["ckpt"]), 0]
     else:

@@ -191,7 +191,7 @@ class Window(QMainWindow):
         self._vt = QTimer(self, interval=15000, timeout=self._vault_tick)
         self._vt.start()
         from . import assistant
-        self._ht = QTimer(self, interval=30000, timeout=assistant.helper.idle_stop)      # the helper's memory back
+        self._ht = QTimer(self, interval=30000, timeout=assistant.idle_stop)      # the helpers' memory back
         self._ht.start()
         self._views = []
         for i, (k, _t, _i) in enumerate(PAGES + BOTTOM):
@@ -538,6 +538,7 @@ class Window(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _moved_done(self, ids, failed):
+        self.forget_pictures([(self.history.get(i) or {}).get("file") for i in ids])
         self.history.remove_many(ids, purge=True)
         self.pages["gallery"].vault_changed()
         msg = f"{len(ids)} moved into the vault, the originals shredded."
@@ -575,6 +576,7 @@ class Window(QMainWindow):
                 h.update(file=path, thumb=thumb)
                 self.history.add(h)
                 vault.remove([e["id"]])
+                self.forget_pictures(["vault:" + e["id"]])
                 moved += 1
             except Exception as ex:
                 QMessageBox.warning(self, "Vault", f"Couldn't take it out:\n{ex}")
@@ -590,6 +592,7 @@ class Window(QMainWindow):
                                                "good?") != QMessageBox.StandardButton.Yes:
             return
         vault.remove([e["id"] for e in entries])
+        self.forget_pictures(["vault:" + e["id"] for e in entries])
         if self.viewer.isVisible():
             self.viewer.drop([e["id"] for e in entries])
         self.pages["gallery"].vault_changed()
@@ -821,6 +824,7 @@ class Window(QMainWindow):
             if e.get("thumb"):
                 caches.append(e["thumb"])
         self.history.remove_many([e["id"] for e in entries], purge=mode != "recycle")
+        self.forget_pictures([e["file"] for e in entries])
         if self.viewer.isVisible():
             self.viewer.drop([e["id"] for e in entries])
         if mode == "recycle":
@@ -837,6 +841,17 @@ class Window(QMainWindow):
             left = shred.delete(files + caches, mode)
             self._shredded.emit(n, len([f for f in left if f in files]))
         threading.Thread(target=work, daemon=True).start()
+
+    def forget_pictures(self, refs):
+        """Pictures that are gone (deleted, moved into or out of the vault) leave the start / end picture slots too,
+        so Generate never runs into a missing picture."""
+        gone = {os.path.normcase(os.path.abspath(r)) if not str(r).startswith(("vault:", "mem:")) else r
+                for r in refs if r}
+        for drop in (self.pages["image"].init, self.pages["video"].start, self.pages["video"].end):
+            p = drop.path or ""
+            key = p if p.startswith(("vault:", "mem:")) else (os.path.normcase(os.path.abspath(p)) if p else "")
+            if key and key in gone:
+                drop.clear()
 
     def _shred_done(self, n, failed):
         if failed:
@@ -985,7 +1000,7 @@ class Window(QMainWindow):
     def _shutdown_cleanup(self):
         vault.lock()
         from . import assistant
-        assistant.helper.stop()
+        assistant.stop_all()
         self._save_window()
         self.pages["image"]._save()
         cfg.set("video_state", dict(self.pages["video"].p))

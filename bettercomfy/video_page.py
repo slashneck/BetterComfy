@@ -456,8 +456,23 @@ class VideoPage(QWidget):
         except Exception:
             ok = False
         if mode == "i2v" and not ok:
-            self.toast.emit("The start picture is missing - drop one in again.", "warn")
+            if p.get("start_image"):
+                self.start.clear()
+                self.toast.emit("The start picture was deleted, so it was taken out. Drop in another one, or press "
+                                "Generate again to make the video from the prompt only.", "warn")
+            else:
+                self.toast.emit("The start picture is missing - drop one in again.", "warn")
             return
+        if p.get("end_image"):
+            from .jobs import ref_ok as _ok
+            try:
+                end_ok = _ok(p["end_image"])
+            except Exception:
+                end_ok = False
+            if not end_ok:
+                self.end.clear()
+                self.toast.emit("The end picture was deleted, so it was taken out.", "warn")
+                return
         if mode == "t2v" and not (p.get("prompt") or "").strip():
             self.toast.emit("Without a start picture, describe the whole scene in the prompt.", "warn")
             return

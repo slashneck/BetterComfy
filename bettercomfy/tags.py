@@ -181,3 +181,116 @@ def set_blacklist(items):
             seen.add(k)
             clean.append(k)
     cfg.set("tag_blacklist", sorted(clean))
+
+
+# ------------------------------------------------------------------------------------------------ reading prompts
+
+PEOPLE = re.compile(r"^(\d\+?(girl|boy|other)s?|multiple (girls|boys|others)|no humans|solo)$")
+_COUNT_WORDS = [(r"\b(two|2) girls\b", "2girls"), (r"\b(two|2) boys\b", "2boys"),
+                (r"\b(three|3) girls\b", "3girls"), (r"\b(a|one|1|single) (girl|woman|lady)\b", "1girl"),
+                (r"\b(a|one|1|single) (boy|man|guy)\b", "1boy"), (r"\b(girl|woman)\b", "1girl"),
+                (r"\b(boy|man)\b", "1boy")]
+_STOP = {"a", "an", "the", "and", "or", "with", "in", "on", "at", "of", "to", "her", "his", "their", "its", "is", "are",
+         "while", "from", "by", "for", "as", "into", "over", "under", "behind", "near", "very", "some", "one", "two"}
+EXPLICIT = {"nsfw", "explicit", "nude", "naked", "completely nude", "nipples", "pussy", "penis", "sex", "cum",
+            "vaginal", "anal", "oral", "fellatio", "paizuri", "masturbation", "topless", "bottomless", "pubic hair",
+            "erection", "areolae", "uncensored", "spread legs", "orgasm", "ejaculation", "cunnilingus", "handjob",
+            "breasts out", "nipple", "genitals", "naked apron"}
+SUGGESTIVE = {"cleavage", "bikini", "swimsuit", "lingerie", "underwear", "panties", "bra", "see-through",
+              "sideboob", "underboob", "garter belt", "leotard", "pantyshot", "bare breasts", "large breasts",
+              "huge breasts", "partially nude", "towel", "bathing", "wet clothes", "suggestive", "sensitive"}
+
+
+def category(tag):
+    """general / artist / series / character / meta (general for anything unknown)."""
+    load()
+    return lookup()[2].get(norm(tag), "general")
+
+
+# everyday words for what Danbooru spells its own way
+_SAME = [(r"\bgr[ae]y\b", "grey"), (r"\bsilver hair\b", "grey hair"), (r"\bblond hair\b", "blonde hair"),
+         (r"\bsmiling\b", "smile"), (r"\bblushing\b", "blush"), (r"\bcolour", "color")]
+
+
+def _plain(text):
+    t = " " + norm(text) + " "
+    for pat, rep_ in _SAME:
+        t = re.sub(pat, rep_, t)
+    return t
+
+
+def _singular(w):
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 4 and w.endswith(("ches", "shes", "xes", "sses")):
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        return w[:-1]
+    return w
+
+
+def extract(text, limit=40):
+    """Real tags found in plain text, without any AI: the longest matching runs of words first, then single
+    words that are common tags. "A girl with silver hair in the rain" -> 1girl, silver hair, rain."""
+    known, alias, cats = lookup()
+    low = _plain(text)
+    out = []
+    for pat, tag in _COUNT_WORDS:
+        if re.search(pat, low) and not any(PEOPLE.match(t) for t in out):
+            out.append(tag)
+    words = re.findall(r"[a-z0-9'\-]+", low)
+    counts = _counts()
+    i = 0
+    while i < len(words):
+        hit = None
+        for n in (4, 3, 2, 1):
+            if i + n > len(words):
+                continue
+            phrase = " ".join(words[i:i + n])
+            if n == 1 and (phrase in _STOP or len(phrase) < 3):
+                continue
+            one = " ".join(words[i:i + n - 1] + [_singular(words[i + n - 1])])
+            t = known.get(phrase) or alias.get(phrase) or known.get(one) or alias.get(one)
+            if t and (n > 1 or (cats.get(norm(t)) == "general" and counts.get(norm(t), 0) >= 2000)):
+                hit = (t, n)
+                break
+        if hit:
+            t = for_prompt(hit[0])
+            if t.lower() not in (x.lower() for x in out) and not blocked(t):
+                out.append(t)
+            i += hit[1]
+        else:
+            i += 1
+    return out[:limit]
+
+
+_count_map = None
+
+
+def _counts():
+    global _count_map
+    if _count_map is None:
+        load()
+        _count_map = {k: c for k, c, _t, _cat in _tags}
+    return _count_map
+
+
+def rating_of(text):
+    """safe / sensitive / nsfw, explicit: what a prompt asks for, read from its words."""
+    low = " " + " ".join(_singular(w) for w in _plain(text).replace(",", " , ").split()) + " "
+    if any(f" {w} " in low or f" {w}," in low for w in EXPLICIT):
+        return "nsfw, explicit"
+    if any(f" {w} " in low or f" {w}," in low for w in SUGGESTIVE):
+        return "sensitive"
+    return "safe"
+
+
+def trim(tag_list, keep):
+    """The most important `keep` tags: people count, characters, series and artists first, then the most used ones
+    (their order in the prompt stays)."""
+    counts = _counts()
+    first = [t for t in tag_list if PEOPLE.match(norm(t)) or category(t) in ("character", "series", "artist")]
+    rest = [t for t in tag_list if t not in first]
+    room = max(0, keep - len(first))
+    best = set(sorted(rest, key=lambda t: -counts.get(norm(t), 0))[:room])
+    return first + [t for t in rest if t in best]

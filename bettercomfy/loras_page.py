@@ -7,8 +7,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLineEdit, QListW
                                QVBoxLayout, QWidget)
 
 from . import comfy, icons, loras, system, theme as T, workflows as W
-from .widgets import (Card, ChipBox, ImageDrop, Scroll, Segmented, Slider, ToggleRow, button, chip, field, hrow,
-                      icon_button, label, nice_name, quiet)
+from .config import cfg
+from .widgets import (BLUR_ROLE, BlurTextDelegate, Card, ChipBox, Combo, ImageDrop, Scroll, Slider, ToggleRow, blur_pixmap,
+                      blur_widget, button, chip, field, hrow, icon_button, label, nice_name, quiet, set_combo)
 
 
 class LorasPage(QWidget):
@@ -27,9 +28,15 @@ class LorasPage(QWidget):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(24, 16, 16, 12)
         lv.setSpacing(12)
-        self.filter = Segmented([("all", "All"), ("sdxl", "SDXL"), ("wan", "WAN"), ("sd15", "SD 1.5"),
-                                 ("flux", "Flux"), ("qwen", "Qwen"), ("other", "Other")], lambda _v: self.fill(), "all",
-                                expand=False, height=34)
+        self.filter = Combo()
+        self.filter.addItem("Made for: all", "all")
+        for k in loras.MADE_FOR:
+            self.filter.addItem(loras.FAMILY_NAMES.get(k, k), k)
+        self.filter.addItem("SDXL, can't be told", "")
+        self.filter.currentIndexChanged.connect(lambda _=0: self.fill())
+        self.tagf = Combo()
+        self.tagf.currentIndexChanged.connect(lambda _=0: self.fill())
+        self._fill_tag_filter()
         self.fav = ToggleRow("Favourites", None, False, lambda _v: self.fill())
         self.fav.setFixedWidth(128)
         self.search = QLineEdit()
@@ -37,7 +44,7 @@ class LorasPage(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _t: self.fill())
         self.count = label("", "Faint")
-        lv.addWidget(hrow(self.filter, self.search, self.fav, self.count,
+        lv.addWidget(hrow(self.filter, self.tagf, self.search, self.fav, self.count,
                           icon_button("folder", self._open_folder, "Open ComfyUI's loras folder", size=16),
                           icon_button("refresh", self.link.refresh_models, "Look for new LoRA files", size=16),
                           spacing=10))
@@ -53,6 +60,7 @@ class LorasPage(QWidget):
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.grid.setStyleSheet("QListWidget::item { padding: 6px; border-radius: 12px; color: #D4D4D8; }"
                                 "QListWidget::item:selected { background: #222226; }")
+        self.grid.setItemDelegate(BlurTextDelegate(self.grid))
         self.grid.currentItemChanged.connect(lambda cur, _p: cur and self.show(cur.data(Qt.ItemDataRole.UserRole)))
         lv.addWidget(self.grid, 1)
         h.addWidget(left, 1)
@@ -77,13 +85,29 @@ class LorasPage(QWidget):
         self.badges.layout().addWidget(self.info_badge)
         self.badges.layout().addStretch(1)
         self.star = button("", self._toggle_fav, "Ghost", "star", "Favourite (shown first everywhere)", checkable=True)
-        self.det.add(hrow(self.name, None, self.star))
+        self.eye = icon_button("eye", self._reveal_toggle, "Show the name and preview of this NSFW LoRA", size=16)
+        self.eye.setCheckable(True)
+        self._revealed = None
+        self.det.add(hrow(self.name, None, self.eye, self.star))
         self.pair_lbl = label("", "Faint", wrap=True)
         self.pair_lbl.hide()
         self.det.add(self.file, self.badges, self.pair_lbl)
         self.prev = ImageDrop("Drop a preview picture here, or click to choose one", 210)
         self.prev.changed.connect(self._set_preview)
         self.det.add(self.prev)
+        c = Card("Made for & tags")
+        self.made = Combo()
+        self.made.currentIndexChanged.connect(self._made_changed)
+        self.tagbox = ChipBox(5)
+        self.tag_new = QLineEdit()
+        self.tag_new.setPlaceholderText("Own tag…")
+        self.tag_new.setFixedWidth(130)
+        self.tag_new.returnPressed.connect(self._add_own_tag)
+        self.tag_sugg = label("", "Faint", wrap=True)
+        c.add(field("Made for", self.made, "Read from the file. Set it here if it is wrong: the LoRA lists on the "
+                                         "Image page go by it.", label_w=64),
+              self.tagbox, hrow(self.tag_new, None, spacing=6), self.tag_sugg)
+        self.det.add(c)
         c = Card("Trigger words")
         self.trig = QLineEdit()
         self.trig.setPlaceholderText("Words that switch it on, separated by commas")
@@ -145,10 +169,25 @@ class LorasPage(QWidget):
             return None, None
         return half, part
 
+    def _hidden(self, n):
+        """An NSFW LoRA while names and previews of those are blurred (Settings, Privacy)."""
+        return bool(cfg.get("lora_blur_nsfw", False)) and loras.is_nsfw(n) and n != self._revealed
+
+    def _fill_tag_filter(self):
+        cur = self.tagf.currentData() if self.tagf.count() else ""
+        quiet(self.tagf, self.tagf.clear)
+        self.tagf.blockSignals(True)
+        self.tagf.addItem("All tags", "")
+        for t in loras.all_tags():
+            self.tagf.addItem(t, t)
+        self.tagf.addItem("No tags yet", "-")
+        set_combo(self.tagf, cur or "")
+        self.tagf.blockSignals(False)
+
     def _icon(self, n):
         prev = loras.preview_for(self.link.install(), n)
         half = self._half(n)[0]
-        key = (n, prev, half, bool(loras.notes(n).get("favorite")))
+        key = (n, prev, half, bool(loras.notes(n).get("favorite")), self._hidden(n))
         if key not in self._icons:
             s = 300
             out = QPixmap(s, s)
@@ -163,6 +202,8 @@ class LorasPage(QWidget):
             pm = QPixmap(prev) if prev else QPixmap()
             if not pm.isNull():
                 pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                if key[-1]:
+                    pm = blur_pixmap(pm, 14)
                 p.drawPixmap((s - pm.width()) // 2, (s - pm.height()) // 2, pm)
             else:
                 p.drawPixmap(s // 2 - 36, s // 2 - 36, icons.pixmap("lora", 72, "#3A3A40", dpr=1.0))
@@ -189,13 +230,18 @@ class LorasPage(QWidget):
     def fill(self):
         self._dirty = False
         q = self.search.text().strip().lower()
-        fam = self.filter.value()
+        fam = self.filter.currentData()
+        tag = self.tagf.currentData()
         fav = self.fav.isChecked()
         rows = []
         for n in self._names():
             nt = loras.notes(n)
-            f = self._info(n).get("family", "other")
+            f = loras.made_for(n, self._info(n))
             if fam != "all" and f != fam:
+                continue
+            if tag == "-" and loras.lora_tags(n):
+                continue
+            if tag and tag != "-" and tag.lower() not in (t.lower() for t in loras.lora_tags(n)):
                 continue
             if fav and not nt.get("favorite"):
                 continue
@@ -208,8 +254,9 @@ class LorasPage(QWidget):
         for _, _, n, f in sorted(rows):
             it = QListWidgetItem(self._icon(n), nice_name(n))
             it.setData(Qt.ItemDataRole.UserRole, n)
+            it.setData(BLUR_ROLE, self._hidden(n))
             half, part = self._half(n)
-            tip = f"{n}\n{loras.FAMILY_NAMES.get(f, f)}"
+            tip = "" if self._hidden(n) else f"{n}\n{loras.made_for_label(n, self._info(n))}"
             if half:
                 tip += f"  ·  {half.capitalize()} noise" + (f"\nPair: {part}" if part else "  (its other half is missing)")
             it.setToolTip(tip)
@@ -226,9 +273,26 @@ class LorasPage(QWidget):
         self.cur = n
         nt = loras.notes(n)
         info = self._info(n)
+        if self._revealed != n:
+            self._revealed = None
         self.name.setText(nice_name(n))
         self.file.setText(n)
-        self.fam_badge.setText(loras.FAMILY_NAMES.get(info.get("family"), "Other"))
+        hidden = self._hidden(n)
+        for w in (self.name, self.file, self.prev):
+            blur_widget(w, hidden, 12)
+        self.eye.setVisible(bool(cfg.get("lora_blur_nsfw", False)) and loras.is_nsfw(n))
+        quiet(self.eye, self.eye.setChecked, not hidden)
+        self.fam_badge.setText(loras.made_for_label(n, info))
+        self.made.blockSignals(True)
+        self.made.clear()
+        det = info.get("base_family", info.get("family", "other"))
+        self.made.addItem(f"As read from the file ({'SDXL, unclear' if det == '' else loras.FAMILY_NAMES.get(det, det)})",
+                          "")
+        for k in loras.MADE_FOR:
+            self.made.addItem(loras.FAMILY_NAMES.get(k, k), k)
+        set_combo(self.made, nt.get("made_for", ""))
+        self.made.blockSignals(False)
+        self._show_tags(n, info)
         half, part = self._half(n)
         self.half_badge.setVisible(bool(half))
         if half:
@@ -275,9 +339,67 @@ class LorasPage(QWidget):
         self.add_vid.setEnabled(is_wan or info.get("family") == "other")
         self._enable(True)
 
+    def _show_tags(self, n, info):
+        self.tagbox.clear()
+        have = {t.lower() for t in loras.lora_tags(n)}
+        for t in loras.all_tags():
+            c = chip(t, None, True, "Press to set or take off this tag")
+            c.setChecked(t.lower() in have)
+            c.clicked.connect(lambda on, t=t: self._tag(t, on))
+            self.tagbox.add(c)
+        sug = loras.suggest_tags(n, info)
+        self.tag_sugg.setText(("Looks like: " + ", ".join(sug) + ". Press the tag to set it.") if sug else "")
+        self.tag_sugg.setVisible(bool(sug))
+
+    def _tag(self, t, on):
+        if not self.cur:
+            return
+        cur = loras.lora_tags(self.cur)
+        new = cur + [t] if on else [x for x in cur if x.lower() != t.lower()]
+        loras.set_tags(self.cur, new)
+        part = self._half(self.cur)[1]
+        if part:
+            loras.set_tags(part, new)                  # the High and Low half share their tags
+        self._after_tags()
+
+    def _add_own_tag(self):
+        t = self.tag_new.text().strip()
+        if not t or not self.cur:
+            return
+        self.tag_new.clear()
+        self._tag(t, True)
+
+    def _after_tags(self):
+        self._fill_tag_filter()
+        self.show(self.cur)
+        it = self.grid.currentItem()
+        if it:
+            it.setData(BLUR_ROLE, self._hidden(self.cur))
+        self._refresh_icon()
+
+    def _made_changed(self, _i):
+        if not self.cur:
+            return
+        v = self.made.currentData() or None
+        loras.set_note(self.cur, made_for=v)
+        part = self._half(self.cur)[1]
+        if part:
+            loras.set_note(part, made_for=v)
+        self.fam_badge.setText(loras.made_for_label(self.cur, self._info(self.cur)))
+
+    def _reveal_toggle(self):
+        if not self.cur:
+            return
+        self._revealed = self.cur if self.eye.isChecked() else None
+        self.show(self.cur)
+        it = self.grid.currentItem()
+        if it:
+            it.setData(BLUR_ROLE, self._hidden(self.cur))
+        self._refresh_icon()
+
     def _enable(self, on):
         for w in (self.star, self.prev, self.trig, self.note, self.strength, self.add_img, self.add_vid, self.url,
-                  self.url_open, self.url_copy):
+                  self.url_open, self.url_copy, self.made, self.tag_new, self.tagbox):
             w.setEnabled(on and (w not in (self.add_img, self.add_vid) or w.isEnabled()))
 
     def _save(self, key, value):

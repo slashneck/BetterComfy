@@ -11,8 +11,13 @@ from .config import BASE
 _FILE = os.path.join(BASE, "loras.json")
 _lock = threading.Lock()
 
-FAMILY_NAMES = {"sdxl": "SDXL", "sd15": "SD 1.5", "wan": "WAN", "flux": "Flux", "qwen": "Qwen-Image",
+FAMILY_NAMES = {"sdxl": "SDXL", "illustrious": "Illustrious", "pony": "Pony", "sd15": "SD 1.5", "wan": "WAN",
+                "flux": "Flux", "qwen": "Qwen-Image", "anima": "Anima", "zimage": "Z-Image", "krea2": "Krea 2",
                 "other": "Other"}
+MADE_FOR = ["illustrious", "pony", "sdxl", "sd15", "flux", "qwen", "anima", "zimage", "krea2", "wan", "other"]
+
+# tags for sorting the library; your own come on top (Settings keeps them with the LoRA notes)
+TAGS = ["NSFW", "Character", "Art style", "Pose", "Clothing", "Concept", "Detailer", "Background", "Effect"]
 
 
 def _load():
@@ -51,11 +56,18 @@ def set_note(name, **kw):
             pass
 
 
+def word_key(w):
+    """The same trigger word however it was typed: case, underscores, spaces and escaped brackets aside."""
+    w = (w or "").lower().replace("_", " ").replace("\\(", "(").replace("\\)", ")")
+    return re.sub(r"\s+", " ", w).strip()
+
+
 def split_words(text):
-    out = []
+    out, seen = [], set()
     for w in re.split(r"[,\n;]", text or ""):
         w = w.strip()
-        if w and w.lower() not in (x.lower() for x in out):
+        if w and word_key(w) not in seen:
+            seen.add(word_key(w))
             out.append(w)
     return out
 
@@ -148,8 +160,112 @@ def file_info(path):
             info["family"] = "wan"
         elif re.search(r"(xl|pony|illustrious|_il)", lo):
             info["family"] = "sdxl"
+    info["base_family"] = _sdxl_kind(meta if h else {}, lo, info) if info["family"] == "sdxl" else info["family"]
     _INFO_CACHE[key] = info
     return info
+
+
+def _sdxl_kind(meta, filename, info):
+    """Which SDXL model an SDXL LoRA was trained on: illustrious / pony / sdxl, or "" when it can't be told. They all
+    look the same inside, so it comes from the training details (the base model's name, Pony's score tags) and
+    then the file name."""
+    trained = " ".join(str(meta.get(k) or "") for k in ("ss_sd_model_name", "ss_base_model", "modelspec.title",
+                                                        "ss_output_name", "modelspec.description")).lower()
+    tf = str(meta.get("ss_tag_frequency") or "")
+    pony = r"pony|pdxl|autismmix"
+    illu = r"illustrious|illu|noob|ilxl|\bixl\b|\(ixl\)|\bwai[^a-z]|[-_ (]il[-_ .)]|[-_ ]il\.safetensors|ilx\b"
+    plain = r"sd_xl_base|sdxl_base_1|sd_xl_1\.0|juggernaut|realvis"
+    # what it was trained on decides first; the file name only when that says nothing
+    for kind, pat in (("pony", pony), ("illustrious", illu), ("sdxl", plain)):
+        if re.search(pat, trained):
+            return kind
+    if "score_9" in tf or "score_8_up" in tf:
+        return "pony"
+    for kind, pat in (("pony", pony), ("illustrious", illu)):
+        if re.search(pat, filename):
+            return kind
+    return ""
+
+
+def made_for(name, info):
+    """What a LoRA is for: what you set in the LoRA library, else what was read from the file ("" = SDXL, unclear)."""
+    return notes(name).get("made_for") or info.get("base_family", info.get("family", "other"))
+
+
+def made_for_label(name, info):
+    m = made_for(name, info)
+    return "SDXL ?" if m == "" else FAMILY_NAMES.get(m, m)
+
+
+def fit(name, info, target):
+    """Does a LoRA fit a picture model of `target`: 'yes', 'maybe' (can't be told) or 'no'."""
+    m = made_for(name, info)
+    if m == "other":
+        return "maybe"
+    sdxl_world = ("sdxl", "illustrious", "pony")
+    if target in sdxl_world:
+        if m == "":
+            return "maybe"
+        return "yes" if m == target else "no"
+    if target in ("anima", "zimage", "krea2"):
+        return "yes" if m == target else ("maybe" if m in ("", "other") else "no")
+    return "yes" if m == target or (m == "" and target == "sdxl") else "no"
+
+
+# ------------------------------------------------------------------------------------------------ tags
+
+def lora_tags(name):
+    return list(notes(name).get("tags") or [])
+
+
+def set_tags(name, tags_):
+    seen, out = set(), []
+    for t in tags_:
+        t = (t or "").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    set_note(name, tags=out)
+
+
+def all_tags():
+    """The built-in tags, then every own tag used anywhere."""
+    own = []
+    for d in _DATA.values():
+        for t in (d or {}).get("tags") or []:
+            if t not in TAGS and t not in own:
+                own.append(t)
+    return TAGS + sorted(own, key=str.lower)
+
+
+def is_nsfw(name):
+    return any(t.lower() == "nsfw" for t in lora_tags(name))
+
+
+def suggest_tags(name, info):
+    """Tags that look right for a LoRA (from its training tags and name), not yet set on it."""
+    from . import tags as T
+    have = {t.lower() for t in lora_tags(name)}
+    words = ", ".join(info.get("suggest") or [])
+    lo = os.path.basename(name).lower()
+    out = []
+    if T.rating_of(words) != "safe" or re.search(r"nsfw|hentai|lewd|porn|sex", lo):
+        out.append("NSFW")
+    try:
+        T.load()
+        if any(T.category(w) == "character" for w in (info.get("suggest") or [])[:6]):
+            out.append("Character")
+    except Exception:
+        pass
+    if re.search(r"style|artist|aesthetic", lo):
+        out.append("Art style")
+    if re.search(r"detail|enhanc|fix|sharp", lo):
+        out.append("Detailer")
+    if re.search(r"pose|position|spread|from.?behind|doggy|missionary|cowgirl", lo + " " + words.lower()):
+        out.append("Pose")
+    if re.search(r"outfit|cloth|dress|uniform|costume|bikini|armor", lo):
+        out.append("Clothing")
+    return [t for t in dict.fromkeys(out) if t.lower() not in have]
 
 
 def preview_for(install, name):

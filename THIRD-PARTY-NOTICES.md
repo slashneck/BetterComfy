@@ -60,8 +60,19 @@ These are not included. If you set up the prompt helper in Settings, Better Comf
 and checks them against a fixed SHA-256 checksum.
 
 - llama.cpp (the runtime, Windows CPU build), MIT license. https://github.com/ggml-org/llama.cpp
-- Qwen3.5 0.8B, 2B or 4B in GGUF format, Apache License 2.0. Models by the Qwen team,
-  https://huggingface.co/Qwen, converted by Unsloth, https://huggingface.co/unsloth
+- Qwen3.5 2B, 4B or 9B uncensored (Huihui abliterated) in GGUF format, Apache License 2.0. Models by the Qwen
+  team, https://huggingface.co/Qwen, uncensored by huihui-ai, https://huggingface.co/huihui-ai, converted by
+  mradermacher, https://huggingface.co/mradermacher
+- TIPO v2.1 1B-A200M in GGUF format by KBlueLeaf, Kohaku License 1.0 (free for personal use).
+  https://huggingface.co/KBlueLeaf/TIPO-v2.1-1B-A200M
+- Qwen3.5 0.8B, 2B or 4B (the standard models of version 1.1.0), Apache License 2.0, converted by Unsloth,
+  https://huggingface.co/unsloth
+
+## Downloaded only when you ask for missing model parts
+
+For Krea 2, Better Comfy can fetch its text encoder (qwen3vl_4b) and VAE (qwen_image_vae) on request from the
+official Comfy-Org repository, https://huggingface.co/Comfy-Org/Krea-2, into ComfyUI's model folders. They are under
+their own licenses and are not included.
 
 ## Python
 

@@ -606,7 +606,10 @@ class GalleryPage(QWidget):
                 data = vault.read(e, "thumb_blob") or b""
             except Exception:
                 data = b""
-            self._vthumb_ready.emit(e["id"], gen, data)
+            try:
+                self._vthumb_ready.emit(e["id"], gen, data)
+            except RuntimeError:                        # the window closed meanwhile
+                return
         self._vbusy = False
 
     def _vthumb_done(self, eid, gen, data):

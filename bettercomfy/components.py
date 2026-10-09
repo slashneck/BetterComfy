@@ -10,8 +10,9 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QListWidget, QLi
 
 from . import comfy, icons, loras, media, theme as T, workflows
 from .config import cfg
-from .widgets import (Combo, Card, ChipBox, Collapsible, Filmstrip, Player, Segmented, Slider, Toggle, ToggleRow, button,
-                      chip, field, hrow, icon_button, label, nice_name, quiet, vcol)
+from .widgets import (BLUR_ROLE, BlurTextDelegate, Combo, Card, ChipBox, Collapsible, Filmstrip, Player, Segmented, Slider,
+                      Toggle, ToggleRow, blur_pixmap, blur_widget, button, chip, field, hrow, icon_button, label, nice_name,
+                      quiet, vcol)
 
 
 # ------------------------------------------------------------------------------------------------ prompt editor
@@ -317,6 +318,19 @@ class PromptCard(Card):
             if not has:
                 m.addSeparator()
                 m.addAction("Write a few words first for the other options").setEnabled(False)
+            if style == "tags" and assistant.model_path("tags"):
+                # what the tag model may add: by default it follows the prompt
+                m.addSeparator()
+                rm = m.addMenu("Rating for new tags")
+                cur = cfg.get("tipo_rating", "auto")
+                for k, t in (("auto", "Like the prompt"), ("safe", "Safe"), ("sensitive", "Sensitive"),
+                             ("nsfw", "NSFW"), ("explicit", "Explicit")):
+                    a = rm.addAction(t)
+                    a.setCheckable(True)
+                    a.setChecked(cur == k)
+                    a.triggered.connect(lambda _=False, k=k: cfg.set("tipo_rating", k))
+            m.addSeparator()
+            m.addAction(icons.icon("settings", "#A1A1AA", 16), "Models…").triggered.connect(self._setup)
         m.exec(self.ai_btn.mapToGlobal(self.ai_btn.rect().bottomLeft()))
 
     def _ask(self, task):
@@ -327,7 +341,9 @@ class PromptCard(Card):
 
     def _setup(self):
         from .helper_ui import setup
-        if setup(self.window()):
+        from . import assistant
+        was = assistant.ready()
+        if setup(self.window()) and not was:
             self._helper_menu()
 
     def _use_answer(self, t):
@@ -386,9 +402,16 @@ class LoraPicker(QDialog):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._fill)
         v.addWidget(self.search)
-        self.only = ToggleRow("Only ones that fit this model", None, True, lambda _v: self._fill())
-        v.addWidget(self.only)
+        self.only = ToggleRow("Only ones that fit this model", "Ones that can't be told are shown with a ?", True,
+                              lambda _v: self._fill())
+        self.tag = Combo()
+        self.tag.addItem("All tags", "")
+        for t in loras.all_tags():
+            self.tag.addItem(t, t)
+        self.tag.currentIndexChanged.connect(lambda _=0: self._fill())
+        v.addWidget(hrow(self.only, self.tag, spacing=10))
         self.list = QListWidget()
+        self.list.setItemDelegate(BlurTextDelegate(self.list))
         self.list.setIconSize(QSize(44, 44))
         self.list.setSpacing(2)
         self.list.itemDoubleClicked.connect(lambda it: self._pick(it))
@@ -406,11 +429,15 @@ class LoraPicker(QDialog):
 
     def _fill(self):
         q = self.search.text().strip().lower()
+        tag = self.tag.currentData()
         self.list.clear()
         rows = []
         for n in self.names:
-            fam = self.info[n].get("family", "other")
-            if self.only.isChecked() and not loras.compatible(fam, self.target):
+            fam = loras.made_for_label(n, self.info[n])
+            fits = loras.fit(n, self.info[n], self.target)
+            if self.only.isChecked() and fits == "no":
+                continue
+            if tag and tag.lower() not in (t.lower() for t in loras.lora_tags(n)):
                 continue
             if self.target == "wan" and self.only.isChecked() and workflows.is_low_half(n) and \
                     workflows.lora_partner(n.replace("Low", "High").replace("low", "high").replace("_L_", "_H_"),
@@ -419,17 +446,23 @@ class LoraPicker(QDialog):
             nt = loras.notes(n)
             if q and q not in n.lower() and q not in nt.get("triggers", "").lower() and q not in nt.get("note", "").lower():
                 continue
-            rows.append((not nt.get("favorite"), n.lower(), n, fam, nt))
-        for _, _, n, fam, nt in sorted(rows):
+            rows.append((not nt.get("favorite"), fits != "yes", n.lower(), n, fam, nt, fits))
+        hide = cfg.get("lora_blur_nsfw", False)
+        for _, _, _, n, fam, nt, fits in sorted(rows):
             it = QListWidgetItem()
             star = "★  " if nt.get("favorite") else ""
             trig = nt.get("triggers", "")
-            it.setText(f"{star}{nice_name(n)}\n{loras.FAMILY_NAMES.get(fam, fam)}" + (f"  ·  {trig[:60]}" if trig else ""))
+            maybe = "  ?" if fits == "maybe" else ""
+            it.setText(f"{star}{nice_name(n)}{maybe}\n{fam}" + (f"  ·  {trig[:60]}" if trig else ""))
+            if fits == "maybe":
+                it.setToolTip("It can't be told what this LoRA was made for. Set it on the LoRAs page (Made for).")
+            blur = hide and loras.is_nsfw(n)
+            it.setData(BLUR_ROLE, blur)
             prev = loras.preview_for(self.install, n)
             if prev:
                 pm = QPixmap(prev).scaled(88, 88, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                           Qt.TransformationMode.SmoothTransformation)
-                it.setIcon(pm)
+                it.setIcon(blur_pixmap(pm, 6) if blur else pm)
             else:
                 it.setIcon(icons.icon("lora", "#6B6B73", 22))
             it.setData(Qt.ItemDataRole.UserRole, n)
@@ -524,6 +557,7 @@ class LoraStack(QWidget):
             if w:
                 w.deleteLater()
         self._chips = []
+        self._shown_words = set()               # a trigger word shows once, however often it is saved
         for i, it in enumerate(self.items):
             self.rows.addWidget(self._row(i, it))
         self.empty.setVisible(not self.items)
@@ -540,12 +574,17 @@ class LoraStack(QWidget):
         name = label(nice_name(it.get("file")), "H3")
         name.setToolTip(it.get("file"))
         name.setMinimumWidth(10)
-        fam = loras.file_info(self._path(it.get("file"))).get("family", "other") if self._path(it.get("file")) else "other"
+        if cfg.get("lora_blur_nsfw", False) and loras.is_nsfw(it.get("file")):
+            blur_widget(name, True)
+            name.setToolTip("")
+        info = loras.file_info(self._path(it.get("file"))) if self._path(it.get("file")) else {"family": "other"}
+        fam = info.get("family", "other")
         warn = None
-        if not loras.compatible(fam, self.get_target()):
+        if self.mode == "image" and loras.fit(it.get("file"), info, self.get_target()) == "no":
             warn = label("⚠", "Muted")
             warn.setStyleSheet("color:#F5B041;")
-            warn.setToolTip(f"This looks like a {loras.FAMILY_NAMES.get(fam, fam)} LoRA - it may not fit this model.")
+            warn.setToolTip(f"This looks like a {loras.made_for_label(it.get('file'), info)} LoRA - it may not fit "
+                            "this model.")
         rm = icon_button("close", lambda i=i: self._remove(i), "Take this LoRA out", size=14)
         up = icon_button("up", lambda i=i: self._move(i, -1), "Earlier", size=13)
         up.setEnabled(i > 0)
@@ -571,7 +610,11 @@ class LoraStack(QWidget):
                 cb.setCurrentIndex(max(0, idx))
                 cb.currentIndexChanged.connect(lambda _=0, it=it, cb=cb: self._set(it, "low_file", cb.currentData()))
                 v.addWidget(field("Low file", cb, label_w=62))
-        words = loras.triggers(it.get("file"))
+        words = []
+        for w in loras.triggers(it.get("file")):
+            if loras.word_key(w) not in self._shown_words:
+                self._shown_words.add(loras.word_key(w))
+                words.append(w)
         if words:
             cbx = ChipBox(5)
             for w in words:

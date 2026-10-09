@@ -113,6 +113,7 @@ class Link(QObject):
                              "upscale": c.choices("UpscaleModelLoader", "model_name"),
                              "interp": c.choices("FrameInterpolationModelLoader", "model_name"),
                              "samplers": c.choices("KSampler", "sampler_name"),
+                             "clip_types": c.choices("CLIPLoader", "type"),
                              "schedulers": c.choices("KSampler", "scheduler"), "source": "comfy",
                              "nodes": {n: c.has(n) for n in ("WanImageToVideo", "WanFirstLastFrameToVideo",
                                                              "FrameInterpolate", "EmptyHunyuanLatentVideo",

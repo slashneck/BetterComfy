@@ -6,7 +6,7 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QMimeData, QPoint, QUrl, QPoin
                             QVariantAnimation, Signal, Property)
 from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetrics, QIcon, QImage, QLinearGradient,
                            QPainter, QPainterPath, QPen, QPixmap)
-from PySide6.QtWidgets import (QAbstractButton, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
+from PySide6.QtWidgets import (QAbstractButton, QStyledItemDelegate, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
                                QHBoxLayout, QLabel, QLayout, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
                                QSizePolicy, QSlider, QStackedWidget, QToolTip, QVBoxLayout, QWidget)
 
@@ -726,8 +726,19 @@ class ChipBox(QWidget):
         super().__init__()
         self.flow = Flow(self, spacing)
 
+    def resizeEvent(self, e):
+        # wrapped onto more lines: the box grows with them (in cards and scroll areas too)
+        super().resizeEvent(e)
+        self._fit()
+
+    def _fit(self):
+        h = self.flow.heightForWidth(max(1, self.width()))
+        if h > 0 and self.minimumHeight() != h:
+            self.setMinimumHeight(h)
+
     def add(self, w):
         self.flow.addWidget(w)
+        QTimer.singleShot(0, self._fit)
         return w
 
     def clear(self):
@@ -1708,3 +1719,57 @@ class NavRail(QWidget):
         p.setBrush(T.accent())
         p.drawRoundedRect(QRectF(0, self._y - 12, 3.5, 24), 1.75, 1.75)
         p.end()
+
+
+# ------------------------------------------------------------------------------------------------ blurring (privacy)
+
+BLUR_ROLE = Qt.ItemDataRole.UserRole + 7        # on a list item: draw its text blurred
+
+
+def blur_pixmap(pm, amount=7):
+    """A blurred copy (shrunk and grown back smoothly: cheap and soft)."""
+    if pm is None or pm.isNull():
+        return pm
+    w, h = pm.width(), pm.height()
+    small = pm.scaled(max(1, w // amount), max(1, h // amount), Qt.AspectRatioMode.IgnoreAspectRatio,
+                      Qt.TransformationMode.SmoothTransformation)
+    out = small.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    out.setDevicePixelRatio(pm.devicePixelRatio())
+    return out
+
+
+def blur_widget(w, on, radius=9):
+    from PySide6.QtWidgets import QGraphicsBlurEffect
+    if on:
+        e = QGraphicsBlurEffect(w)
+        e.setBlurRadius(radius)
+        w.setGraphicsEffect(e)
+    else:
+        w.setGraphicsEffect(None)
+
+
+class BlurTextDelegate(QStyledItemDelegate):
+    """List items whose text should not be readable (BLUR_ROLE set) get it drawn blurred."""
+
+    def paint(self, p, opt, idx):
+        if not idx.data(BLUR_ROLE):
+            return super().paint(p, opt, idx)
+        from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
+        o = QStyleOptionViewItem(opt)
+        self.initStyleOption(o, idx)
+        style = o.widget.style() if o.widget else QApplication.style()
+        tr = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, o, o.widget)
+        text, o.text = o.text, ""
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, o, p, o.widget)
+        if tr.width() <= 0 or tr.height() <= 0 or not text:
+            return
+        dpr = 2.0
+        pm = QPixmap(int(tr.width() * dpr), int(tr.height() * dpr))
+        pm.fill(Qt.GlobalColor.transparent)
+        pm.setDevicePixelRatio(dpr)
+        q = QPainter(pm)
+        q.setFont(o.font)
+        q.setPen(o.palette.color(o.palette.ColorRole.Text))
+        q.drawText(QRect(0, 0, tr.width(), tr.height()), int(o.displayAlignment) | int(Qt.TextFlag.TextWordWrap), text)
+        q.end()
+        p.drawPixmap(tr.topLeft(), blur_pixmap(pm, 9))

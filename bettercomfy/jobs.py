@@ -77,11 +77,11 @@ class _Ctx:
     def item(self, i, status):
         self.w.sig_item.emit(self.w.job["id"], i, status)
 
-    def run(self, i, prompt, labels, on_progress, on_preview, weights, capture=None):
+    def run(self, i, prompt, labels, on_progress, on_preview, weights, capture=None, forget=False):
         """client.run for item i - stoppable on its own. Returns None when only this item was stopped."""
         try:
             return self.client.run(prompt, labels, on_progress, on_preview,
-                                   lambda: self.cancelled() or self.stopped(i), weights, capture)
+                                   lambda: self.cancelled() or self.stopped(i), weights, capture, forget)
         except (InterruptedError, comfy.ComfyError):
             if self.stopped(i) and not self.cancelled():
                 self.item(i, "canceled")
@@ -319,7 +319,7 @@ def _run_image(ctx, job, c, p, op, src, lists, private, trail):
         t0 = time.time()
         cap = (_ws_output(P, c), []) if private else None
         hist = ctx.run(i, P, labels, lambda f, t, i=i: ctx.progress((i + 0.97 * f) / n, t + tag), ctx.preview,
-                       weights, cap if cap and cap[0] else None)
+                       weights, cap if cap and cap[0] else None, forget=private)
         if hist is None:
             continue
         if private:
@@ -442,7 +442,7 @@ def _run_video(ctx, job, c, p, mode, private, trail):
         t0 = time.time()
         cap = (_ws_output(P, c), []) if private else None
         hist = ctx.run(v, P, labels, lambda f, t, v=v: ctx.progress((v + 0.93 * f) / n, t + tag), ctx.preview,
-                       weights, cap if cap and cap[0] else None)
+                       weights, cap if cap and cap[0] else None, forget=private)
         if hist is None:
             continue
         if private:

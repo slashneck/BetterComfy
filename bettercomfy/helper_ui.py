@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QDialog, QFileDialog, QFrame, QLineEdit, QListWid
 
 from . import assistant as H, system, tags, theme as T
 from .config import cfg
-from .widgets import Segmented, button, hrow, icon_button, label
+from .widgets import button, field, hrow, icon_button, label
 
 
 def _mb(n):
@@ -20,115 +20,316 @@ def _mb(n):
 
 # ================================================================================================ setup
 
+class _ModelRow(QFrame):
+    """One model in the list: what it is for, and Download / Use / Delete."""
+
+    def __init__(self, dlg, m):
+        super().__init__()
+        self.dlg, self.m = dlg, m
+        self.setObjectName("ModelRow")
+        self.setStyleSheet(f"#ModelRow {{ background: {T.FIELD}; border-radius: 10px; }}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 10, 10, 10)
+        v.setSpacing(4)
+        self.title = label(f"{m['name']}  ·  {_mb(m['size'])}", None)
+        self.badge = label("In use", "Badge")
+        self.dl = button("Download", lambda: dlg.download(m), "Accent", "download")
+        self.use = button("Use", lambda: dlg.use(m), "Ghost", "check")
+        self.rm = button("", lambda: dlg.delete(m), "Ghost", "trash", "Delete the downloaded file", icon_color="#FF8A8A")
+        v.addWidget(hrow(self.title, None, self.badge, self.use, self.rm, self.dl, spacing=4))
+        note = label(m["note"], "Faint", wrap=True)
+        v.addWidget(note)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setFixedHeight(6)
+        self.bar.setTextVisible(False)
+        self.status = label("", "Muted")
+        v.addWidget(self.bar)
+        v.addWidget(self.status)
+        self.refresh()
+
+    def refresh(self, busy=False):
+        base = self.dlg.base()
+        have = H.installed(self.m, base)
+        inuse = have and os.path.normcase(H.model_path(self.m["role"]) or "") == os.path.normcase(
+            H.local_path(self.m, base))
+        downloading = self.dlg.current is self.m
+        self.badge.setVisible(inuse and not downloading)
+        self.use.setVisible(have and not inuse and not downloading)
+        self.rm.setVisible(have and not downloading)
+        self.dl.setVisible(not have and not downloading)
+        self.dl.setEnabled(not busy)
+        self.use.setEnabled(not busy)
+        self.rm.setEnabled(not busy)
+        self.bar.setVisible(downloading)
+        self.status.setVisible(downloading or bool(self.status.text()) and not have)
+
+
 class SetupDialog(QDialog):
-    """Pick a model and a folder, then download - or use a .gguf file that is already on this PC."""
-    _prog = Signal(int, int)
+    """The prompt helper's models: download (to a folder you pick), use or delete each one."""
+    _prog = Signal(object, object)          # bytes: above 2 GB a Qt int would wrap around
     _end = Signal(object)
 
     def __init__(self, parent):
         super().__init__(parent)
         self.setWindowTitle("Prompt helper")
         self.setModal(True)
-        self.resize(560, 10)
+        self.resize(640, 10)
         self.cancel_ev = None
-        self.own_file = None
+        self.current = None
         v = QVBoxLayout(self)
         v.setContentsMargins(24, 22, 24, 20)
-        v.setSpacing(12)
-        v.addWidget(label("Prompt helper", "H2"))
-        v.addWidget(label("Writes and improves prompts with a small language model. It runs on your processor, so the "
-                          "graphics card stays free for generating, and once it is set up it works without internet.",
-                          "Muted", wrap=True))
-        self.pick = Segmented([(m["key"], f"{m['name']}  ·  {_mb(m['size'])}", m["note"]) for m in H.MODELS],
-                              lambda _v: self._update(), "2b", height=34)
-        v.addWidget(self.pick)
-        self.note = label("", "Faint", wrap=True)
-        v.addWidget(self.note)
-        v.addWidget(label("Download to", "Muted"))
+        v.setSpacing(10)
+        v.addWidget(label("Prompt helper models", "H2"))
+        v.addWidget(label("Small language models that write and improve prompts. They run on your processor, so the "
+                          "graphics card stays free for generating, and once downloaded they work without internet. "
+                          "Pick one for writing and, for tag based models, the tag model.", "Muted", wrap=True))
         self.dir = QLineEdit(H.folder())
         self.dir.setMinimumHeight(34)
-        self.dir.textChanged.connect(lambda _t: self._update())
-        v.addWidget(hrow(self.dir, button("Browse…", self._browse, "Ghost", "folder"), spacing=6))
-        self.space = label("", "Faint", wrap=True)
+        self.dir.editingFinished.connect(self._refresh)
+        self.space = label("", "Faint")
+        v.addWidget(field("Folder", hrow(self.dir, button("Browse…", self._browse, "Ghost", "folder"), spacing=6),
+                          label_w=60))
         v.addWidget(self.space)
+        self.rows = []
+        groups = [("For writing", [m for m in H.MODELS if m["role"] == "write" and not m.get("old")]),
+                  ("For tags", [m for m in H.MODELS if m["role"] == "tags"]),
+                  ("Older standard models", [m for m in H.MODELS if m.get("old") and H.installed(m)])]
+        for title, ms in groups:
+            if not ms:
+                continue
+            v.addWidget(label(title.upper(), "CardTitle"))
+            for m in ms:
+                r = _ModelRow(self, m)
+                self.rows.append(r)
+                v.addWidget(r)
+        v.addWidget(label(f"The runtime that runs them (llama.cpp, {_mb(H.RUNTIME['size'])}) comes with the first "
+                          "download. Models come from Hugging Face, the runtime from GitHub; every file is checked "
+                          "against a fixed checksum.", "Faint", wrap=True))
+        self.own_btn = button("Use a .gguf file I already have…", self._own, "Ghost", "upload")
+        v.addWidget(hrow(self.own_btn, None, button("Close", self.accept, "Accent"), spacing=6))
+        self._prog.connect(self._progress)
+        self._end.connect(self._finished)
+        self._refresh()
+
+    def base(self):
+        return self.dir.text().strip() or H.folder()
+
+    def _row(self, m):
+        return next((r for r in self.rows if r.m is m), None)
+
+    def _refresh(self):
+        busy = self.current is not None
+        for r in self.rows:
+            r.refresh(busy)
+        free = system.disk_free(self.base())
+        self.space.setText(f"{_mb(free)} free there" if free is not None else "")
+        self.dir.setEnabled(not busy)
+
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(self, "Where should the prompt helper go?", self.base())
+        if d:
+            self.dir.setText(os.path.normpath(os.path.join(d, "Better Comfy prompt helper"))
+                             if os.listdir(d) else os.path.normpath(d))
+            self._refresh()
+
+    def _own(self):
+        f, _ = QFileDialog.getOpenFileName(self, "A language model (.gguf)", "", "GGUF model (*.gguf)")
+        if not f:
+            return
+        self.current = {"name": os.path.basename(f), "role": "write", "own": os.path.normpath(f)}
+        self._start(self.current["own"])
+
+    # ---- actions
+    def download(self, m):
+        free = system.disk_free(self.base())
+        if free is not None and free < m["size"] + 2 ** 28:
+            r = self._row(m)
+            r.status.setText("Not enough free space in that folder.")
+            r.status.show()
+            return
+        self.current = m
+        self._start(m)
+
+    def _start(self, what):
+        base = self.base()
+        try:
+            os.makedirs(base, exist_ok=True)
+        except OSError as ex:
+            self.space.setText(f"That folder can't be used: {ex}")
+            self.current = None
+            return
+        self.cancel_ev = threading.Event()
+        self._t0, self._d0 = time.time(), None
+        r = self._row(self.current) if isinstance(self.current, dict) and "key" in self.current else None
+        if r:
+            r.status.setText("Starting…")
+            r.bar.setValue(0)
+            r.dl.setText("Stop")
+            r.dl.show()
+            r.dl.setEnabled(True)
+            try:
+                r.dl.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            r.dl.clicked.connect(self._stop)
+        self._refresh()
+        if r:
+            r.dl.show()
+            r.dl.setEnabled(True)
+
+        def work():
+            try:
+                self._end.emit(H.install(what, base, lambda d, t: self._prog.emit(d, t), self.cancel_ev))
+            except Exception as ex:                     # noqa: BLE001 - shown to the user
+                self._end.emit(ex)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _stop(self):
+        if self.cancel_ev is not None:
+            self.cancel_ev.set()
+
+    def _progress(self, done, total):
+        r = self._row(self.current)
+        if r is None:
+            return
+        if self._d0 is None:
+            self._d0, self._t0 = done, time.time()
+        r.bar.setValue(int(1000 * done / max(1, total)))
+        speed = (done - self._d0) / max(0.5, time.time() - self._t0)
+        left = (total - done) / speed if speed > 0 else 0
+        r.status.setText(f"{_mb(done)} of {_mb(total)}" + (f"  ·  {speed / 2 ** 20:.1f} MB/s  ·  about "
+                                                             f"{int(left // 60)}:{int(left % 60):02d} left"
+                                                             if speed > 0 and done < total else ""))
+
+    def _finished(self, res):
+        m, self.current, self.cancel_ev = self.current, None, None
+        r = self._row(m)
+        if r is not None:
+            r.dl.setText("Download")
+            try:
+                r.dl.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            r.dl.clicked.connect(lambda: self.download(m))
+        if isinstance(res, H.Cancelled):
+            if r:
+                r.status.setText("Stopped. What was downloaded is kept, the next try goes on from there.")
+        elif isinstance(res, Exception):
+            if r:
+                r.status.setText(f"That did not work: {res}")
+            else:
+                self.space.setText(f"That did not work: {res}")
+        else:
+            cfg.set("helper_dir", self.base())
+            role = m.get("role", "write")
+            if not H.model_path(role) or m.get("own"):
+                cfg.set(H.ROLE_KEY[role], res)          # the first model of a role is used right away
+            if r:
+                r.status.setText("")
+        self._refresh()
+
+    def use(self, m):
+        cfg.set("helper_dir", self.base())
+        cfg.set(H.ROLE_KEY[m["role"]], H.local_path(m, self.base()))
+        self._refresh()
+
+    def delete(self, m):
+        from PySide6.QtWidgets import QMessageBox
+        if QMessageBox.question(self, "Prompt helper", f"Delete {m['name']} ({_mb(m['size'])})?") != \
+                QMessageBox.StandardButton.Yes:
+            return
+        H.remove_model(m, self.base())
+        self._refresh()
+
+    def reject(self):
+        if self.cancel_ev is not None:
+            self.cancel_ev.set()
+        super().reject()
+
+
+class PartsDialog(QDialog):
+    """Missing engine parts (text encoder, VAE) fetched into ComfyUI's model folders: optional, on request."""
+    _prog = Signal(object, object)
+    _end = Signal(object)
+
+    def __init__(self, parent, family, missing, install):
+        super().__init__(parent)
+        from . import comfy, workflows as W
+        self.setWindowTitle("Missing parts")
+        self.setModal(True)
+        self.resize(560, 10)
+        self.install = install
+        self.parts = [(what, W.PART_DOWNLOADS[family][what]) for what in missing if what in W.PART_DOWNLOADS.get(family, {})]
+        self.cancel_ev = None
+        v = QVBoxLayout(self)
+        v.setContentsMargins(24, 22, 24, 20)
+        v.setSpacing(10)
+        v.addWidget(label(f"{W.FAMILIES[family]['name']}: missing parts", "H2"))
+        total = sum(p["size"] for _w, p in self.parts)
+        v.addWidget(label("These are the official files from Comfy-Org on Hugging Face, checked against a fixed "
+                          f"checksum after the download. Together {_mb(total)}.", "Muted", wrap=True))
+        for what, p in self.parts:
+            v.addWidget(label(f"{what}:  {p['file']}  ·  {_mb(p['size'])}", None))
+        self.dir = QLineEdit(comfy.sub_dir(install, "models") if install else "")
+        self.dir.setMinimumHeight(34)
+        self.dir.textChanged.connect(lambda _t: self._check())
+        v.addWidget(field("Into", hrow(self.dir, button("Browse…", self._browse, "Ghost", "folder"), spacing=6),
+                          label_w=40))
+        self.warn = label("", "Faint", wrap=True)
+        v.addWidget(self.warn)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.hide()
         self.status = label("", "Muted", wrap=True)
-        self.status.hide()
         v.addWidget(self.bar)
         v.addWidget(self.status)
-        self.own_btn = button("Use a .gguf file I already have…", self._own, "Ghost", "upload")
         self.go_btn = button("Download", self._go, "Accent", "download")
-        self.cancel_btn = button("Cancel", self._cancel, "Ghost")
-        v.addWidget(hrow(self.own_btn, None, self.cancel_btn, self.go_btn, spacing=6))
+        v.addWidget(hrow(None, button("Close", self.reject, "Ghost"), self.go_btn, spacing=6))
         self._prog.connect(self._progress)
         self._end.connect(self._finished)
-        self._update()
+        self._check()
 
-    def _model(self):
-        return next(m for m in H.MODELS if m["key"] == self.pick.value())
-
-    def _need(self):
-        base = self.dir.text().strip()
-        need = 0 if H.server_exe(base) else H.RUNTIME["size"]
-        if self.own_file is None:
-            m = self._model()
-            p = os.path.join(base, "models", m["file"])
-            if not (os.path.isfile(p) and os.path.getsize(p) == m["size"]):
-                need += m["size"]
-        return need
-
-    def _update(self):
-        m = self._model()
-        self.note.setText(f"{m['note']} Comes from Hugging Face ({m['file']}), the runtime ({_mb(H.RUNTIME['size'])}) "
-                          f"from the llama.cpp project on GitHub. Both are checked after the download.")
-        base = self.dir.text().strip()
-        free = system.disk_free(base) if base else None
-        need = self._need()
-        self.space.setText((f"Needs {_mb(need)}" if need else "Already downloaded there, nothing to fetch") +
-                           (f"  ·  {_mb(free)} free there" if free is not None and need else "") +
-                           ("  ·  not enough space" if free is not None and free < need + 2 ** 28 else ""))
-        self.go_btn.setText("Download" if need else "Set up")
+    def _check(self):
+        from . import comfy
+        models = os.path.normcase(os.path.abspath(comfy.sub_dir(self.install, "models"))) if self.install else ""
+        here = os.path.normcase(os.path.abspath(self.dir.text().strip() or "."))
+        free = system.disk_free(self.dir.text().strip())
+        bits = []
+        if models and here != models:
+            bits.append("ComfyUI only finds them in its own models folder (or one set up in its extra_model_paths.yaml).")
+        if free is not None:
+            bits.append(f"{_mb(free)} free there.")
+        self.warn.setText(" ".join(bits))
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "Where should the prompt helper go?", self.dir.text())
+        d = QFileDialog.getExistingDirectory(self, "Download the parts into", self.dir.text())
         if d:
-            self.dir.setText(os.path.normpath(os.path.join(d, "Better Comfy prompt helper"))
-                             if os.listdir(d) else os.path.normpath(d))
-
-    def _own(self):
-        f, _ = QFileDialog.getOpenFileName(self, "A language model (.gguf)", "", "GGUF model (*.gguf)")
-        if f:
-            self.own_file = os.path.normpath(f)
-            self.note.setText(f"Uses {os.path.basename(f)}. Small instruct models (1 to 4 billion parameters) work "
-                              "best. Only the runtime is downloaded.")
-            self.pick.setEnabled(False)
-            self._update()
+            self.dir.setText(os.path.normpath(d))
 
     def _go(self):
-        base = self.dir.text().strip()
-        if not base:
+        if self.cancel_ev is not None:
+            self.cancel_ev.set()
             return
-        try:
-            os.makedirs(base, exist_ok=True)
-        except OSError as ex:
-            self.status.setText(f"That folder can't be used: {ex}")
-            self.status.show()
-            return
+        root = self.dir.text().strip()
         self.cancel_ev = threading.Event()
-        for w in (self.go_btn, self.own_btn, self.pick, self.dir):
-            w.setEnabled(False)
+        self.go_btn.setText("Stop")
         self.bar.show()
-        self.status.show()
-        self.status.setText("Starting…")
         self._t0, self._d0 = time.time(), None
-        model = self.own_file or self._model()
+        parts = self.parts
+        total = sum(p["size"] for _w, p in parts)
 
         def work():
             try:
-                path = H.install(model, base, lambda d, t: self._prog.emit(d, t), self.cancel_ev)
-                self._end.emit(path)
+                done = 0
+                for _what, p in parts:
+                    sub = p["folder"].split("/", 1)[1]
+                    dest = os.path.join(root, sub, p["file"])
+                    if not (os.path.isfile(dest) and os.path.getsize(dest) == p["size"]):
+                        H.download(p["url"], dest, p["size"], p["sha256"],
+                                   lambda d, _t, base=done: self._prog.emit(base + d, total), self.cancel_ev)
+                    done += p["size"]
+                self._end.emit(True)
             except Exception as ex:                     # noqa: BLE001 - shown to the user
                 self._end.emit(ex)
         threading.Thread(target=work, daemon=True).start()
@@ -145,26 +346,13 @@ class SetupDialog(QDialog):
 
     def _finished(self, res):
         self.cancel_ev = None
-        for w in (self.go_btn, self.own_btn, self.dir):
-            w.setEnabled(True)
-        self.pick.setEnabled(self.own_file is None)
+        self.go_btn.setText("Download")
         if isinstance(res, H.Cancelled):
             self.status.setText("Stopped. What was downloaded is kept, the next try goes on from there.")
-            self.bar.hide()
-            return
-        if isinstance(res, Exception):
+        elif isinstance(res, Exception):
             self.status.setText(f"That did not work: {res}")
-            self.bar.hide()
-            return
-        cfg.set("helper_dir", self.dir.text().strip())
-        cfg.set("helper_model", res)
-        self.accept()
-
-    def _cancel(self):
-        if self.cancel_ev is not None:
-            self.cancel_ev.set()
         else:
-            self.reject()
+            self.accept()
 
     def reject(self):
         if self.cancel_ev is not None:

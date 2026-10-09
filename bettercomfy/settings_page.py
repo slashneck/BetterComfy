@@ -164,6 +164,9 @@ class SettingsPage(QWidget):
               ToggleRow("Block screen capture while the vault is open", "The same, only while the vault is unlocked",
                         cfg.get("vault_hide_capture", True),
                         lambda v: (cfg.set("vault_hide_capture", v), self.app._capture_guard())),
+              ToggleRow("Blur NSFW LoRAs", "Names and previews of LoRAs tagged NSFW are blurred everywhere in the "
+                                           "app (the eye on the LoRAs page shows one)",
+                        cfg.get("lora_blur_nsfw", False), self._blur_loras),
               ToggleRow("Clear ComfyUI's memory after private jobs", "Once the queue is done, no private picture stays "
                                                                      "in ComfyUI's cache. The models load again for "
                                                                      "the next job.",
@@ -197,7 +200,14 @@ class SettingsPage(QWidget):
               field("Free its memory", self.h_free, "It loads again by itself the next time (a few seconds).",
                     label_w=110),
               field("Tag suggestions", self.tag_mode, "While typing a prompt: Tab or Enter takes a suggestion.",
-                    label_w=110))
+                    label_w=110),
+              field("Sentences by", Segmented([("auto", "TIPO", "The tag model writes sentence prompts too (when it "
+                                                                 "is set up): more concrete, about a second"),
+                                               ("writer", "Writing model", "The Qwen model writes them: slower, freer "
+                                                                           "wording")],
+                                              lambda v: cfg.set("sentences_by", v), cfg.get("sentences_by", "auto"),
+                                              height=30),
+                    "Video motion is always written by the writing model.", label_w=110))
         right.addWidget(c)
         self.helper_status()
 
@@ -562,6 +572,15 @@ class SettingsPage(QWidget):
             tags.set_blacklist([])
             self._bl_fill()
 
+    def _blur_loras(self, on):
+        cfg.set("lora_blur_nsfw", on)
+        lp = self.app.pages.get("loras")
+        if lp is not None:
+            lp._icons.clear()
+            lp._dirty = True
+        for k in ("image", "video"):
+            self.app.pages[k].loras.rebuild()
+
     # ---- prompt helper
     def _helper_dir(self):
         from . import assistant
@@ -570,12 +589,14 @@ class SettingsPage(QWidget):
     def helper_status(self):
         from . import assistant
         if assistant.ready():
-            t = f"Ready: {assistant.model_name()}  ·  {assistant.folder()}"
+            w = assistant.model_name(role="write") if assistant.model_path("write") else "none"
+            g = assistant.model_name(role="tags") if assistant.model_path("tags") else "none"
+            t = f"Writing: {w}  ·  Tags: {g}  ·  {assistant.folder()}"
         else:
-            t = ("Not set up. It improves and writes prompts with a small language model on your processor. "
-                 "Optional: about 0.5 to 2.6 GB, downloaded once to a folder you pick.")
+            t = ("Not set up. It improves and writes prompts with small language models on your processor. "
+                 "Optional: 1 to 5 GB per model, downloaded once to a folder you pick.")
         self.h_state.setText(t)
-        self.h_setup.setText("Change model…" if assistant.ready() else "Set up…")
+        self.h_setup.setText("Models…" if assistant.ready() else "Set up…")
         self.h_open.setVisible(os.path.isdir(assistant.folder()))
         self.h_remove.setVisible(os.path.isdir(assistant.folder()))
 

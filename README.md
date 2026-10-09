@@ -27,7 +27,7 @@ build or ComfyUI Desktop), starts it when needed and reads your models, LoRAs an
 
 ## Features
 
-**Pictures.** SDXL, Pony, Illustrious, SD 1.5, Flux, Qwen-Image, Anima and Z-Image. Better Comfy reads what a model is
+**Pictures.** SDXL, Pony, Illustrious, SD 1.5, Flux, Qwen-Image, Anima, Z-Image and Krea 2. Better Comfy reads what a model is
 from inside the file and sets the size, steps, sampler, guidance, clip skip and the usual quality words for it. Five
 presets from Ultra Fast to Best, with an upscale pass for the top two. Speed models (Lightning, Hyper, DMD2, Turbo) are
 spotted and run with few steps by themselves. Every fine control is still there under Advanced.
@@ -43,9 +43,11 @@ any picture bigger and sharper with its own model, prompt and seed, or just enla
 **Compare.** The same picture with one setting changed (seeds, guidance, steps, sampler, scheduler, preset, LoRA
 strength or model), side by side.
 
-**A LoRA library.** Every LoRA in your ComfyUI with what it was made for, its trigger words (suggested from the file),
-notes, the page you got it from, a favourite strength and a preview picture. WAN LoRAs that come as a high and a low
-file are paired up and share their trigger words. Click a trigger word to put it into the prompt.
+**A LoRA library.** Every LoRA in your ComfyUI with what it was made for (Illustrious, Pony or plain SDXL told apart
+from the training details, and settable by hand), its trigger words (suggested from the file), notes, the page you got
+it from, a favourite strength and a preview picture. Sort them with tags (character, art style, pose, detailer and your
+own), and blur the names and previews of NSFW ones if you like. WAN LoRAs that come as a high and a low file are paired
+up and share their trigger words. Click a trigger word to put it into the prompt.
 
 **A queue.** Pictures and videos one after the other, with time estimates learned on your PC. Take single pictures out
 of a job, stop one while the rest goes on, and choose what happens when the queue is done: nothing, free the graphics
@@ -64,10 +66,11 @@ them leaving the vault. A recovery key, auto lock, and a re-encrypt option when 
 **Deleting for good.** Deleted files can go to the Recycle Bin, be shredded (overwritten, renamed and then deleted) or be
 handed to Eraser if it is installed.
 
-**A prompt helper.** A small language model that improves, extends, shortens or writes prompts, as tags or as sentences
-depending on the model, and writes motion for videos. It runs on the processor, so the graphics card stays free. It is
-optional: set it up in Settings and it downloads once (0.5 to 2.6 GB) to a folder you pick, or use a `.gguf` model you
-already have. Tag models also get tag suggestions while you type.
+**A prompt helper.** Small language models that improve, extend, shorten or write prompts, as tags or as sentences
+depending on the model, and write motion for videos. Uncensored writing models (Qwen3.5 2B, 4B or 9B) and TIPO, a model
+made only for Danbooru tags. They run on the processor, so the graphics card stays free. All optional: pick them in
+Settings and each downloads once (1 to 5 GB) to a folder you pick, or use a `.gguf` model you already have. Tag models
+also get tag suggestions while you type, with a tag blacklist you can edit.
 
 **Screen capture blocking.** Screenshots, recordings and screen sharing can't see Better Comfy, either always or while
 the vault is open.
@@ -111,8 +114,9 @@ gallery where they are.
 
 Everything you make stays on your PC. Better Comfy only talks to the ComfyUI on this computer, and a ComfyUI it starts
 itself only listens on this computer. There is no account, no telemetry and no upload. Better Comfy goes online to ask GitHub
-whether a new version exists (you can switch that off under Settings, Updates) and, only if you set up the prompt
-helper, to download it once from Hugging Face and GitHub. The prompt helper itself runs on your PC.
+whether a new version exists (you can switch that off under Settings, Updates) and, only when you ask for it, to
+download prompt helper models or missing model parts once from Hugging Face and GitHub. The prompt helper itself runs on
+your PC.
 
 ## Building
 

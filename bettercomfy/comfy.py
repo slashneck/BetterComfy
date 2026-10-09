@@ -821,7 +821,27 @@ class Client:
         name = re.sub(r"^\s*cuda:\d+\s*", "", name).replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").strip()
         return name, float(dev.get("vram_total", 0)) / 2 ** 30, float(dev.get("vram_free", 0)) / 2 ** 30
 
-    def run(self, prompt, labels=None, on_progress=None, on_preview=None, cancel=None, weights=None, capture=None):
+    def run(self, prompt, labels=None, on_progress=None, on_preview=None, cancel=None, weights=None, capture=None,
+            forget=False):
+        """forget: a private job - ComfyUI is told to drop it from its history however it ends (done, failed or
+        stopped). A stopped job only lands there a moment later, so it is asked again a few times."""
+        box = {}
+        try:
+            return self._run(prompt, labels, on_progress, on_preview, cancel, weights, capture, box)
+        finally:
+            if forget and box.get("pid"):
+                self._forget_soon(box["pid"])
+
+    def _forget_soon(self, pid):
+        self.forget(pid)
+
+        def later():
+            for wait in (2, 3, 5, 5):
+                time.sleep(wait)
+                self.forget(pid)
+        threading.Thread(target=later, daemon=True).start()
+
+    def _run(self, prompt, labels, on_progress, on_preview, cancel, weights, capture, box):
         """Queue a prompt and wait for it. on_progress(fraction, text); on_preview(jpeg/png bytes).
         weights: {node id: share of the work}. capture: (node id, list) - the pictures that node sends over the
         connection (SaveImageWebsocket) are put into the list instead of being shown as previews; nothing of them is
@@ -835,6 +855,7 @@ class Client:
                 raise ComfyError("The live connection to ComfyUI couldn't be opened, so a private result couldn't be "
                                  "received. Nothing was made.")
         pid = self.queue(prompt)
+        box["pid"] = pid
         labels, weights = labels or {}, weights or {}
         total_w = sum(weights.values()) or 1.0
         done_w = 0.0
