@@ -158,3 +158,34 @@ def idle_seconds():
     if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li)):
         return 0.0
     return ((ctypes.windll.kernel32.GetTickCount() - li.dwTime) & 0xFFFFFFFF) / 1000.0
+
+
+_private_clip = None
+
+
+def copy_private(text=None, image=None):
+    """Copies something private so Windows does not keep it: left out of the clipboard history (Win+V), the cloud
+    clipboard and clipboard tools. It is cleared again when the vault locks."""
+    from PySide6.QtCore import QMimeData
+    from PySide6.QtWidgets import QApplication
+    global _private_clip
+    md = QMimeData()
+    if text is not None:
+        md.setText(text)
+    if image is not None:
+        md.setImageData(image)
+    for f in ("ExcludeClipboardContentFromMonitorProcessing", "CanIncludeInClipboardHistory",
+              "CanUploadToCloudClipboard"):
+        md.setData(f'application/x-qt-windows-mime;value="{f}"', b"\0\0\0\0")
+    QApplication.clipboard().setMimeData(md)
+    _private_clip = md
+
+
+def clear_private_clipboard():
+    """Empties the clipboard if it still holds a private copy made here."""
+    global _private_clip
+    from PySide6.QtWidgets import QApplication
+    cb = QApplication.clipboard()
+    if _private_clip is not None and cb.ownsClipboard():
+        cb.clear()
+    _private_clip = None

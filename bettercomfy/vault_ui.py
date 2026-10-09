@@ -186,7 +186,8 @@ class RecoveryKeyDialog(QDialog):
         v.addWidget(hrow(None, self.done_btn))
 
     def _copy(self):
-        QApplication.clipboard().setText(self.key)
+        from .system import copy_private
+        copy_private(text=self.key)
 
     def reject(self):
         if self.ok.isChecked():

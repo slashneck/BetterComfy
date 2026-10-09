@@ -3,6 +3,7 @@ kept across restarts. The work itself runs in a background thread; everything sh
 import copy
 import io
 import json
+import re
 import os
 import threading
 import time
@@ -98,6 +99,19 @@ def remember_bytes(data):
     return key
 
 
+def prune_memory(queue, keep=()):
+    """Drops in-memory pictures nothing needs any more: no unfinished job uses them (failed ones can be tried again)
+    and they are not on show. The bytes go with the last reference (Python cannot overwrite them in place)."""
+    used = set(keep)
+    for j in queue.jobs:
+        if j["status"] != "done":
+            ps = [j.get("params") or {}] + [v.get("set") or {} for v in (j.get("params") or {}).get("variants") or []]
+            for p in ps:
+                used.update(str(p.get(k) or "") for k in REFS)
+    for k in [k for k in MEM if k not in used]:
+        MEM.pop(k, None)
+
+
 def is_private(p):
     """Made for the vault: asked for, or made from something that is in the vault."""
     return bool(p.get("private")) or any(str(p.get(k) or "").startswith(("vault:", "mem:")) for k in REFS)
@@ -150,7 +164,7 @@ class _Trail:
 
     def upload(self, data, name):
         c = self.ctx.client
-        ref = c.upload(data, ("p_" + uuid.uuid4().hex[:12] + ".png") if self.private else name)
+        ref = c.upload(data, (PRIVATE_PREFIX + uuid.uuid4().hex + ".png") if self.private else name)
         if self.private:
             ins = self.ctx.w.link.install()
             if ins:
@@ -169,6 +183,29 @@ class _Trail:
             for f in self.files:
                 shred.shred_file(f)
             self.files = []
+
+
+PRIVATE_PREFIX = "bcp_"
+_LEFTOVER = re.compile(r"^bcp_[0-9a-f]{32}( \(\d+\))?\.png$")
+
+
+_STARTED = time.time()
+
+
+def sweep_leftovers(install):
+    """Private uploads a crash (or a killed app) left in ComfyUI's input folder: shredded at the next start.
+    Only files with the private upload name pattern are touched."""
+    if not install:
+        return 0
+    d = comfy.sub_dir(install, "input")
+    try:
+        names = [n for n in os.listdir(d) if _LEFTOVER.match(n) and os.path.getmtime(os.path.join(d, n)) < _STARTED]
+    except OSError:
+        return 0
+    from . import shred
+    for n in names:
+        shred.shred_file(os.path.join(d, n))
+    return len(names)
 
 
 def _ws_output(P, c):

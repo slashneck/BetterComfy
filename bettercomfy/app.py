@@ -17,7 +17,7 @@ from .config import APP_ID, APP_NAME, BASE, VERSION, cfg, resource
 from .gallery_page import GalleryPage
 from .history import History
 from .image_page import ImagePage
-from .jobs import Queue
+from .jobs import Queue, sweep_leftovers
 from .link import Link
 from .loras_page import LorasPage
 from .queue_page import QueuePage
@@ -179,6 +179,7 @@ class Window(QMainWindow):
         self.viewer = Viewer(root)
         self.viewer.app = self
         self.link.status.connect(self._status)
+        threading.Thread(target=lambda: sweep_leftovers(self.link.install()), daemon=True).start()
         self.queue.changed.connect(self._queue)
         self.queue.job_changed.connect(lambda _j: self._queue())
         self.queue.finished.connect(self._queue_done)
@@ -271,6 +272,8 @@ class Window(QMainWindow):
             if QMessageBox.question(self, APP_NAME, "Something is being made right now. Stop it and update?") != \
                     QMessageBox.StandardButton.Yes:
                 return
+        if not self._parked_ok():
+            return
         if u.install(restart=True):
             self._updating = True
             self._quit()
@@ -349,6 +352,13 @@ class Window(QMainWindow):
         elif what == "stop_comfy":
             self.link.stop()
             self.toast("ComfyUI stopped.", "info")
+        elif what in ("close", "shutdown") and vault.parked:
+            # private results waiting for the vault only live in memory: closing would lose them
+            self._show()
+            msg = "Private results are waiting for the vault. Unlock it to keep them, Better Comfy stays open."
+            if self.tray:
+                self.tray.showMessage(APP_NAME, msg, QIcon(resource("assets", "icon.ico")), 8000)
+            self.toast(msg, "warn")
         elif what in ("close", "sleep", "shutdown"):
             text = {"close": "Better Comfy closes", "sleep": "The PC goes to sleep", "shutdown": "The PC shuts down"}[what]
             self.showNormal()
@@ -368,6 +378,7 @@ class Window(QMainWindow):
 
     # ---------------------------------------------------------------- results
     def _job_done(self, jid):
+        self._prune_memory()
         j = self.queue.job(jid)
         if j and j["kind"] == "image" and j["params"].get("variants"):
             self.open_compare(jid)
@@ -388,7 +399,13 @@ class Window(QMainWindow):
         from . import workflows as W
         ip = self.pages["image"]
         kind = self.link.kind_of(params.get("ckpt"), params.get("model_src", "ckpt"))
-        src = media.image_size(params.get("source_image")) if params.get("source_image") else None
+        src = None
+        if params.get("source_image"):
+            from .jobs import ref_size
+            try:
+                src = ref_size(params["source_image"])      # a file, or a vault / memory picture
+            except Exception:
+                src = None
         pl = W.image_plan(params, kind, src)
         self.queue.add("image", params, title, thumb=thumb, units=W.work_units("image", pl, params.get("count", 1)),
                        ckpt_kind=kind)
@@ -422,10 +439,17 @@ class Window(QMainWindow):
         for drop in (self.pages["image"].init, self.pages["video"].start, self.pages["video"].end):
             if str(drop.path or "").startswith(("vault:", "mem:")):
                 drop.clear()                # no decrypted picture stays on screen
+        self._prune_memory()
+        system.clear_private_clipboard()
         self.pages["gallery"].vault_changed()
         self._capture_guard()
         if not quiet:
             self.toast("Vault locked.", "info")
+
+    def _prune_memory(self):
+        from .jobs import prune_memory
+        shown = [self.pages["image"].init.path, self.pages["video"].start.path, self.pages["video"].end.path]
+        prune_memory(self.queue, [str(x or "") for x in shown])
 
     def _capture_guard(self):
         """While the vault is open the window is left out of screen captures and recordings (Settings, Vault)."""
@@ -437,15 +461,38 @@ class Window(QMainWindow):
             pass
 
     def _vault_tick(self):
-        if not vault.is_open():
+        if not vault.is_open() or self._queue_busy():
+            return
+        if self.isMinimized() and cfg.get("vault_lock_minimized", True):
+            self.lock_vault(quiet=True)             # minimized while the queue was busy: locks once it is done
             return
         mins = int(cfg.get("vault_autolock", 10) or 0)
-        if mins > 0 and system.idle_seconds() >= mins * 60:
+        if mins > 0 and system.idle_seconds() >= mins * 60 and not self._vault_video_playing():
             self.lock_vault()
+
+    def _queue_busy(self):
+        """Something is being made, or waits in a queue that is not paused: auto-lock waits for it."""
+        q = self.queue
+        return bool(q.running() or (q.pending() and not q.paused))
+
+    def _vault_video_playing(self):
+        """A vault video plays on screen: watching it does not count as being away."""
+        g = self.pages["gallery"]
+        if g.isVisible() and g.cur and g.cur.get("vault") and g.player.timer.isActive():
+            return True
+        v = self.viewer
+        if v.isVisible() and v.timer.isActive() and (v.cur() or {}).get("vault"):
+            return True
+        for k in ("image", "video"):
+            pane = self.pages[k].pane
+            if pane.isVisible() and getattr(pane, "private", None) and pane.player.timer.isActive():
+                return True
+        return False
 
     def changeEvent(self, e):
         super().changeEvent(e)
-        if e.type() == QEvent.Type.WindowStateChange and self.isMinimized() and cfg.get("vault_lock_minimized", True):
+        if e.type() == QEvent.Type.WindowStateChange and self.isMinimized() and cfg.get("vault_lock_minimized", True) \
+                and not self._queue_busy():
             self.lock_vault(quiet=True)
 
     def move_to_vault(self, entries):
@@ -574,10 +621,11 @@ class Window(QMainWindow):
             data = vault.read(e)
             img = QImage()
             img.loadFromData(data)
-            QApplication.clipboard().setImage(img)
-            self.toast("Picture copied (it is on the clipboard now, unencrypted).", "info")
+            system.copy_private(image=img)
+            self.toast("Picture copied. It stays out of the clipboard history and is cleared when the vault locks.",
+                       "info")
         elif key == "copyprompt":
-            QApplication.clipboard().setText(e.get("final_prompt") or e.get("prompt") or "")
+            system.copy_private(text=e.get("final_prompt") or e.get("prompt") or "")
             self.toast("Prompt copied.", "ok")
         elif key == "take_out":
             self.take_out_of_vault([e])
@@ -845,7 +893,7 @@ class Window(QMainWindow):
         self.pause_act = m.addAction("Pause queue")
         self.pause_act.triggered.connect(lambda: self.queue.resume() if self.queue.paused else self.queue.pause())
         m.addSeparator()
-        m.addAction("Quit").triggered.connect(self._quit)
+        m.addAction("Quit").triggered.connect(lambda: self._parked_ok() and self._quit())
         self.tray.setContextMenu(m)
         self.tray.activated.connect(lambda r: self._show() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
         self.tray.show()
@@ -890,13 +938,40 @@ class Window(QMainWindow):
                                   2500)
             return
         if self.queue.active_count():
+            from .jobs import is_private
+            priv = len([j for j in self.queue.jobs if j["status"] in ("queued", "running") and is_private(j["params"])])
+            note = "Waiting ones are kept for next time" + (
+                f", except {priv} private one{'s' if priv != 1 else ''}: private jobs are never saved" if priv else "")
             r = QMessageBox.question(self, APP_NAME, f"{self.queue.active_count()} jobs are still in the queue. Close "
-                                                     "anyway? (Waiting ones are kept for next time.)")
+                                                     f"anyway? ({note}.)")
             if r != QMessageBox.StandardButton.Yes:
                 e.ignore()
                 return
+        if not self._parked_ok():
+            e.ignore()
+            return
         self._quit()
         e.accept()
+
+    def _parked_ok(self):
+        """Private results made while the vault was locked only live in memory: closing must not lose them unasked.
+        True when it is fine to close."""
+        n = len(vault.parked)
+        if not n:
+            return True
+        self._show()
+        box = QMessageBox(QMessageBox.Icon.Question, APP_NAME,
+                          f"{n} private result{'s are' if n != 1 else ' is'} waiting to go into the vault. Until you "
+                          f"unlock it {'they only exist' if n != 1 else 'it only exists'} in memory, so closing now "
+                          f"loses {'them' if n != 1 else 'it'}.", parent=self)
+        keep = box.addButton("Unlock and keep", QMessageBox.ButtonRole.AcceptRole)
+        lose = box.addButton("Close and lose", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        if box.clickedButton() is keep:
+            return self.ensure_vault("Unlock to keep the private results.") and not vault.parked
+        return box.clickedButton() is lose
 
     def _shutdown_cleanup(self):
         vault.lock()

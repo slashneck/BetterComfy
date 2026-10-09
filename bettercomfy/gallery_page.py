@@ -1,8 +1,10 @@
 """The GALLERY: everything made, sorted your way - favourites, marked for deletion, collections (manual or smart),
 sorting and filters, quick culling with F and X, bulk actions. Files never move: collections are just labels."""
 import os
+import threading
+from collections import deque
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem,
@@ -74,6 +76,7 @@ class Nav(QListWidget):
 
 
 class GalleryPage(QWidget):
+    _vthumb_ready = Signal(str, int, object)       # vault entry id, lock generation, decrypted thumbnail bytes
     title = "Gallery"
     subtitle = "Everything you made"
 
@@ -209,6 +212,7 @@ class GalleryPage(QWidget):
         self.player.setToolTip("Click: view big (zoom, ← →)")
         self.player.clicked.connect(self._view)
         self._shown = []
+        self._rows = {}
         self.player.message("Pick something", "Its settings show here.")
         sv.addWidget(self.player, 1)
         self.fav_btn = icon_button("star", lambda: self._flag("fav"), "Favourite (F)", size=17)
@@ -376,7 +380,10 @@ class GalleryPage(QWidget):
     def vault_changed(self):
         """Opened, locked or changed: thumbnails decrypted for it go when it locks."""
         if not vault.is_open():
-            self._vthumbs = {}
+            if hasattr(self, "_vthumbs"):
+                self._vgen += 1
+                self._vthumbs, self._vdata = {}, {}
+                self._vqueue.clear()
             if self.cur and self.cur.get("vault"):
                 self.cur = None
         self._fill_nav()
@@ -564,42 +571,88 @@ class GalleryPage(QWidget):
         return self._icons[key]
 
     def _vicon(self, e):
-        """A vault thumbnail: decrypted into memory, forgotten when the vault locks."""
+        """A vault thumbnail: decrypted in the background (a lock tile until then), only ever in memory and
+        forgotten when the vault locks."""
         if not hasattr(self, "_vthumbs"):
-            self._vthumbs = {}
+            self._vthumbs, self._vdata, self._vgen, self._vqueue, self._vbusy = {}, {}, 0, deque(), False
+            self._vph = {}                              # the lock tiles shown until a thumbnail is decrypted
+            self._vthumb_ready.connect(self._vthumb_done)
         key = (e["id"], self.thumb)
-        if key not in self._vthumbs:
-            s = self.thumb * 2
-            src = QPixmap()
+        if key in self._vthumbs:
+            return self._vthumbs[key]
+        if e["id"] in self._vdata:
+            self._vthumbs[key] = self._vrender(e, self._vdata[e["id"]])
+            return self._vthumbs[key]
+        self._vqueue.append(e)
+        if not self._vbusy:
+            self._vbusy = True
+            threading.Thread(target=self._vwork, args=(self._vgen,), daemon=True).start()
+        ph = (e.get("kind"), self.thumb)
+        if ph not in self._vph:
+            self._vph[ph] = self._vrender(e, None)
+        return self._vph[ph]
+
+    def _vwork(self, gen):
+        while gen == self._vgen:
             try:
-                src.loadFromData(vault.read(e, "thumb_blob") or b"")
+                e = self._vqueue.popleft()
+            except IndexError:
+                self._vbusy = False
+                if not self._vqueue:                    # nothing came in while it was stopping
+                    return
+                self._vbusy = True
+                continue
+            try:
+                data = vault.read(e, "thumb_blob") or b""
             except Exception:
+                data = b""
+            self._vthumb_ready.emit(e["id"], gen, data)
+        self._vbusy = False
+
+    def _vthumb_done(self, eid, gen, data):
+        if gen != self._vgen or not vault.is_open():
+            return
+        self._vdata[eid] = data
+        e = vault.get(eid)
+        if e is None:
+            return
+        ic = self._vthumbs[(eid, self.thumb)] = self._vrender(e, data)
+        it = self._rows.get(eid)
+        if it is not None:
+            try:
+                it.setIcon(ic)
+            except RuntimeError:                        # the grid was refilled meanwhile
                 pass
-            out = QPixmap(s, s)
-            out.fill(Qt.GlobalColor.transparent)
-            p = QPainter(out)
-            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(0, 0, s, s), 20, 20)
-            p.setClipPath(path)
-            p.fillRect(out.rect(), QColor(T.SURFACE2))
-            if not src.isNull():
-                src = src.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                 Qt.TransformationMode.SmoothTransformation)
-                p.drawPixmap((s - src.width()) // 2, (s - src.height()) // 2, src)
-            p.setClipping(False)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(0, 0, 0, 150))
-            p.drawEllipse(QPointF(s - 34, s - 34), 22, 22)
-            p.drawPixmap(QPointF(s - 49, s - 49), icons.pixmap("lock", 30, "#FFFFFF", dpr=1.0))
-            if e.get("kind") == "video":
-                p.drawEllipse(QPointF(34, s - 34), 22, 22)
-                p.drawPixmap(QPointF(21, s - 47), icons.pixmap("play", 26, "#FFFFFF", dpr=1.0))
-            p.end()
-            out.setDevicePixelRatio(2.0)
-            self._vthumbs[key] = QIcon(out)
-        return self._vthumbs[key]
+
+    def _vrender(self, e, data):
+        s = self.thumb * 2
+        src = QPixmap()
+        if data:
+            src.loadFromData(data)
+        out = QPixmap(s, s)
+        out.fill(Qt.GlobalColor.transparent)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, s, s), 20, 20)
+        p.setClipPath(path)
+        p.fillRect(out.rect(), QColor(T.SURFACE2))
+        if not src.isNull():
+            src = src.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                             Qt.TransformationMode.SmoothTransformation)
+            p.drawPixmap((s - src.width()) // 2, (s - src.height()) // 2, src)
+        p.setClipping(False)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 150))
+        p.drawEllipse(QPointF(s - 34, s - 34), 22, 22)
+        p.drawPixmap(QPointF(s - 49, s - 49), icons.pixmap("lock", 30, "#FFFFFF", dpr=1.0))
+        if e.get("kind") == "video":
+            p.drawEllipse(QPointF(34, s - 34), 22, 22)
+            p.drawPixmap(QPointF(21, s - 47), icons.pixmap("play", 26, "#FFFFFF", dpr=1.0))
+        p.end()
+        out.setDevicePixelRatio(2.0)
+        return QIcon(out)
 
     def _sorted(self, items):
         k = self.sort.currentData()
@@ -632,6 +685,7 @@ class GalleryPage(QWidget):
         self._shown = items[:5000]
         self.grid.blockSignals(True)
         self.grid.clear()
+        self._rows = {}
         self.grid.setIconSize(QSize(self.thumb, self.thumb))
         self.grid.setGridSize(QSize(self.thumb + 14, self.thumb + 14))
         for e in self._shown:
@@ -639,6 +693,7 @@ class GalleryPage(QWidget):
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
             it.setToolTip((e.get("prompt") or "")[:300])
             self.grid.addItem(it)
+            self._rows[e["id"]] = it
             if e["id"] == keep:
                 self.grid.setCurrentItem(it)
         self.grid.blockSignals(False)
@@ -812,6 +867,9 @@ class GalleryPage(QWidget):
 
     def _act(self, k):
         if not self.cur:
+            return
+        if k == "copyprompt" and self.cur.get("vault"):
+            self.app.result_action(k, self.cur, self)
             return
         if k == "copyprompt":
             from PySide6.QtWidgets import QApplication

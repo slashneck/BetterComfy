@@ -147,8 +147,9 @@ class SettingsPage(QWidget):
         set_combo(self.autolock, int(cfg.get("vault_autolock", 10)))
         self.autolock.currentIndexChanged.connect(lambda _=0: cfg.set("vault_autolock", self.autolock.currentData()))
         c.add(self.v_state, hrow(self.v_make, self.v_lock, self.v_pw, None, self.v_del, spacing=4),
-              field("Lock when idle", self.autolock, "No mouse or keyboard for that long locks it.", label_w=110),
-              ToggleRow("Lock when minimized", None, cfg.get("vault_lock_minimized", True),
+              field("Lock when idle", self.autolock, "No mouse or keyboard for that long locks it. It waits while the "
+                                                     "queue is working or a vault video plays.", label_w=110),
+              ToggleRow("Lock when minimized", "Once the queue is done, if it is still working", cfg.get("vault_lock_minimized", True),
                         lambda v: cfg.set("vault_lock_minimized", v)),
               ToggleRow("Hide the window from screenshots", "While the vault is open, screenshots, recordings and "
                                                             "screen sharing show the window black",
