@@ -3,7 +3,7 @@ the seed control, the Generate bar and the result pane (player + filmstrip + act
 import re
 import threading
 
-from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QTextCursor
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMenu,
                                QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget)
@@ -26,9 +26,134 @@ class PromptEdit(QPlainTextEdit):
         self.setMinimumHeight(height)
         self.setMaximumHeight(height + 160)
         self.setTabChangesFocus(True)
+        self.tags_on = lambda: False            # set by the page: tag suggestions for this model or not
+        self._pop = None
+        self._frag = None
+        self._sug = QTimer(self, singleShot=True, interval=70, timeout=self._suggest)
+        self.cursorPositionChanged.connect(self._moved)
+        self._typing = False
+
+    # ---- tag suggestions
+    def _popup(self):
+        if self._pop is None:
+            from .helper_ui import TagPopup
+            self._pop = TagPopup()
+            self._pop.picked.connect(self._take)
+        return self._pop
+
+    def _hide_tags(self):
+        if self._pop is not None:
+            self._pop.hide()
+
+    def _tags_open(self):
+        return self._pop is not None and self._pop.isVisible()
+
+    def _moved(self):
+        if not self._typing:
+            self._hide_tags()
+
+    def _suggest(self):
+        self._typing = False
+        if not self.hasFocus() or not self.tags_on():
+            return self._hide_tags()
+        from . import tags
+        if not tags.ready():
+            tags.load()                         # once, about 70 ms (normally already loaded on focus)
+        c = self.textCursor()
+        txt, pos = self.toPlainText(), c.position()
+        if c.hasSelection() or (pos < len(txt) and txt[pos] not in ",\n)}|] "):
+            return self._hide_tags()
+        a = pos
+        while a > 0:
+            ch = txt[a - 1]
+            if ch in ",\n(){}|[]:<>":
+                # "miku (c": a bracket after a word belongs to the tag, one at the start is a weight
+                if ch == "(" and a >= 3 and txt[a - 2] == " " and txt[a - 3].isalnum():
+                    a -= 1
+                    continue
+                if ch == "(" and a >= 2 and txt[a - 2] == "\\":
+                    a -= 2
+                    continue
+                break
+            a -= 1
+        if txt.rfind("<", 0, pos) > txt.rfind(">", 0, pos):
+            return self._hide_tags()            # inside <lora:...>
+        frag = txt[a:pos]
+        lead = len(frag) - len(frag.lstrip())
+        frag = frag.strip()
+        res = tags.search(frag) if len(frag) >= 2 else []
+        if not res or (len(res) == 1 and res[0][0].lower() == frag.lower()):
+            return self._hide_tags()
+        self._frag = (a + lead, pos)
+        at = self.viewport().mapToGlobal(self.cursorRect().bottomLeft()) + QPoint(-6, 6)
+        self._popup().show_for(res, at)
+
+    def _take(self, tag):
+        from . import tags
+        if not tag or not self._frag:
+            return
+        a, b = self._frag
+        txt = self.toPlainText()
+        if b > len(txt):
+            return self._hide_tags()
+        new = tags.for_prompt(tag)
+        nxt = txt[b:b + 1]
+        if nxt in ("", "\n"):
+            new += ", "
+        c = self.textCursor()
+        c.beginEditBlock()
+        c.setPosition(a)
+        c.setPosition(b, QTextCursor.MoveMode.KeepAnchor)
+        c.insertText(new)
+        c.endEditBlock()
+        self.setTextCursor(c)
+        self._hide_tags()
+
+    def event(self, e):
+        # Tab normally moves on to the next field: with suggestions open it takes the suggestion
+        if e.type() == QEvent.Type.KeyPress and e.key() == Qt.Key.Key_Tab and self._tags_open():
+            self._take(self._pop.current_tag())
+            return True
+        return super().event(e)
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        if self.tags_on():
+            from . import tags
+            tags.load_async()
+
+    def focusOutEvent(self, e):
+        super().focusOutEvent(e)
+        QTimer.singleShot(150, lambda: None if self.hasFocus() else self._hide_tags())
+
+    def hideEvent(self, e):
+        self._hide_tags()
+        super().hideEvent(e)
 
     def keyPressEvent(self, e):
         mod = e.modifiers()
+        if self._tags_open():
+            k = e.key()
+            if k in (Qt.Key.Key_Up, Qt.Key.Key_Down) and not mod & Qt.KeyboardModifier.ControlModifier:
+                self._pop.move_sel(-1 if k == Qt.Key.Key_Up else 1)
+                return
+            if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not mod & Qt.KeyboardModifier.ControlModifier:
+                self._take(self._pop.current_tag())
+                return
+            if k == Qt.Key.Key_Escape:
+                self._hide_tags()
+                return
+        if e.text() and (e.text().isprintable() or e.key() == Qt.Key.Key_Backspace) and \
+                not mod & Qt.KeyboardModifier.ControlModifier:
+            self._typing = True
+            super().keyPressEvent(e)
+            self._sug.start()
+            return
+        if e.key() == Qt.Key.Key_Backspace:
+            self._typing = True
+            super().keyPressEvent(e)
+            self._sug.start()
+            return
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and mod & Qt.KeyboardModifier.ControlModifier:
             self.submit.emit()
             return
@@ -105,16 +230,26 @@ class PromptCard(Card):
     submit = Signal()
 
     def __init__(self, title="Prompt", placeholder="", chips=None, neg_toggle_text=None, neg_sub=None, height=118):
+        self.ai_btn = icon_button("sparkle", None, "Prompt helper: improve, extend or write the prompt", size=16)
         self.hist_btn = icon_button("clock", None, "Recent prompts", size=16)
         self.clear_btn = icon_button("close", None, "Clear the prompt", size=16)
-        super().__init__(title, [self.hist_btn, self.clear_btn])
+        super().__init__(title, [self.ai_btn, self.hist_btn, self.clear_btn])
+        self.style_fn = lambda: "natural"       # set by the page: tags / mixed / natural / motion
+        self.what = "image"
         self.edit = PromptEdit(placeholder, height)
+        self.edit.tags_on = self._tags_on
         self.edit.textChanged.connect(self._changed)
         self.edit.submit.connect(self.submit.emit)
         self.hist_btn.clicked.connect(lambda: history_menu(self, self.set_text).exec(
             self.hist_btn.mapToGlobal(self.hist_btn.rect().bottomLeft())))
         self.clear_btn.clicked.connect(lambda: self.edit.setPlainText(""))
+        self.ai_btn.clicked.connect(self._helper_menu)
         self.add(self.edit)
+        from .helper_ui import Panel
+        self.panel = Panel()
+        self.panel.use.connect(self._use_answer)
+        self.add(self.panel)
+        self.refresh_helper()
         self.info = label("", "Faint")
         self.tip = label("Ctrl+Enter generates · Ctrl+↑/↓ weights a word · {a|b} picks one per image", "Faint",
                          wrap=True)
@@ -139,6 +274,7 @@ class PromptCard(Card):
             self.neg_toggle = ToggleRow(neg_toggle_text, neg_sub, False, lambda v: self._changed())
             self.neg.add(self.neg_toggle)
         self.neg_edit = PromptEdit("Things you do not want, e.g. blurry, extra fingers, text", 64)
+        self.neg_edit.tags_on = self._tags_on
         self.neg_edit.textChanged.connect(self._changed)
         self.neg_edit.submit.connect(self.submit.emit)
         self.neg.add(self.neg_edit)
@@ -146,6 +282,65 @@ class PromptCard(Card):
 
     def text(self):
         return self.edit.toPlainText()
+
+    # ---- prompt helper and tag suggestions
+    def refresh_helper(self):
+        self.ai_btn.setVisible(bool(cfg.get("helper_button", True)))
+
+    def _tags_on(self):
+        mode = cfg.get("tag_suggest", "auto")
+        return mode == "on" or (mode == "auto" and self.style_fn() in ("tags", "mixed"))
+
+    def _helper_menu(self):
+        from . import assistant
+        m = QMenu(self)
+        if not assistant.ready():
+            m.addAction(icons.icon("sparkle", "#A1A1AA", 16), "Set up the prompt helper…").triggered.connect(
+                self._setup)
+        else:
+            style = self.style_fn()
+            has = bool(self.text().strip())
+            if style == "motion":
+                items = [("motion", "Write the motion", "video", True), ("improve", "Improve it", "sparkle", has),
+                         ("shorter", "Make it shorter", "close", has)]
+            else:
+                tagged = style in ("tags", "mixed")
+                items = [("improve", "Improve it", "sparkle", has), ("detail", "More detail", "plus", has),
+                         ("shorter", "Make it shorter", "close", has),
+                         ("idea", "Write a prompt from my words", "edit", has),
+                         ("convert", "Turn into sentences" if tagged else "Turn into tags", "swap", has),
+                         ("surprise", "Surprise me", "dice", True)]
+            for key, text, ic, on in items:
+                a = m.addAction(icons.icon(ic, "#A1A1AA", 16), text)
+                a.setEnabled(on)
+                a.triggered.connect(lambda _=False, k=key: self._ask(k))
+            if not has:
+                m.addSeparator()
+                m.addAction("Write a few words first for the other options").setEnabled(False)
+        m.exec(self.ai_btn.mapToGlobal(self.ai_btn.rect().bottomLeft()))
+
+    def _ask(self, task):
+        style = self.style_fn()
+        if task == "convert":
+            style = "natural" if style in ("tags", "mixed") else "tags"
+        self.panel.start(task, self.text(), style, self.what)
+
+    def _setup(self):
+        from .helper_ui import setup
+        if setup(self.window()):
+            self._helper_menu()
+
+    def _use_answer(self, t):
+        """Into the prompt as one step, so Ctrl+Z brings the old prompt back."""
+        if not t:
+            return
+        c = self.edit.textCursor()
+        c.beginEditBlock()
+        c.select(QTextCursor.SelectionType.Document)
+        c.insertText(t)
+        c.endEditBlock()
+        self.edit.setTextCursor(c)
+        self.panel.close_panel()
 
     def set_text(self, t):
         self.edit.setPlainText(t or "")

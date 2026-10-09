@@ -53,6 +53,24 @@ memory, stop ComfyUI, close the app, sleep or shut down.
 
 **A gallery.** Everything you made, with its settings. Reuse them, view pictures big with zoom, join videos, animate or
 upscale from there. Pictures keep their settings inside the file, and dropping one onto ComfyUI opens its workflow.
+Favourite with F, mark with X and delete everything marked at once, sort by date, type, model or LoRA, filter and search,
+and keep pictures in collections (also smart ones that fill themselves by model or LoRA).
+
+**A vault.** Pictures and videos that only open with your password, encrypted with Argon2id and AES-256-GCM and only
+ever decrypted in memory. Turn on Private next to Generate and the result goes straight into the vault, without a copy
+in your folders or in ComfyUI's. Move pictures in later, take them out again, or animate, upscale and edit them without
+them leaving the vault. A recovery key, auto lock, and a re-encrypt option when you change the password.
+
+**Deleting for good.** Deleted files can go to the Recycle Bin, be shredded (overwritten, renamed and then deleted) or be
+handed to Eraser if it is installed.
+
+**A prompt helper.** A small language model that improves, extends, shortens or writes prompts, as tags or as sentences
+depending on the model, and writes motion for videos. It runs on the processor, so the graphics card stays free. It is
+optional: set it up in Settings and it downloads once (0.5 to 2.6 GB) to a folder you pick, or use a `.gguf` model you
+already have. Tag models also get tag suggestions while you type.
+
+**Screen capture blocking.** Screenshots, recordings and screen sharing can't see Better Comfy, either always or while
+the vault is open.
 
 **Little things.** Your own presets, live previews while a picture is drawn, prompt history, Ctrl+Enter to generate,
 Ctrl+Up and Down to weight a word, `{a|b|c}` to pick one per picture, accent colours and a tray icon.
@@ -82,7 +100,8 @@ On the first start Better Comfy looks for ComfyUI. If it can't find it, pick the
 | --- | --- |
 | Pictures | `Pictures\Better Comfy` (changeable) |
 | Videos | `Videos\Better Comfy` (changeable) |
-| Settings, gallery, LoRA notes | `%LocalAppData%\BetterComfy` |
+| Settings, gallery, LoRA notes, the vault | `%LocalAppData%\BetterComfy` |
+| Prompt helper (if set up) | the folder you pick |
 | The program | `%LocalAppData%\Programs\BetterComfy` |
 
 Updates only replace program files. Uninstalling removes the program and leaves your pictures, videos, settings and
@@ -91,8 +110,9 @@ gallery where they are.
 ## Privacy
 
 Everything you make stays on your PC. Better Comfy only talks to the ComfyUI on this computer, and a ComfyUI it starts
-itself only listens on this computer. There is no account, no telemetry and no upload. The only thing Better Comfy does
-online is ask GitHub whether a new version exists, and you can switch that off under Settings, Updates.
+itself only listens on this computer. There is no account, no telemetry and no upload. Better Comfy goes online to ask GitHub
+whether a new version exists (you can switch that off under Settings, Updates) and, only if you set up the prompt
+helper, to download it once from Hugging Face and GitHub. The prompt helper itself runs on your PC.
 
 ## Building
 
@@ -113,5 +133,6 @@ Copyright (C) 2026 slashneck. Better Comfy is free software under the
 stay under the same license with its source code available. The license doesn't cover the Better Comfy name or logo
 (GPLv3 section 7e), so please give modified versions their own name.
 
-Better Comfy is not made by or connected to the ComfyUI team. It includes Qt, PySide6, FFmpeg and the Python runtime.
+Better Comfy is not made by or connected to the ComfyUI team. It includes Qt, PySide6, FFmpeg, cryptography,
+argon2-cffi, a Danbooru tag list and the Python runtime.
 See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

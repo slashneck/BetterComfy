@@ -39,6 +39,30 @@ Copyright (c) 2005-2025 NumPy Developers, BSD 3-Clause license. https://github.c
 Copyright (c) 1997-2011 Secret Labs AB, (c) 1995-2011 Fredrik Lundh and contributors, (c) 2010 Jeffrey A. Clark and
 contributors. MIT-CMU license. https://github.com/python-pillow/Pillow
 
+## cryptography
+
+Used for AES-256-GCM and HKDF in the vault. Copyright (c) Individual contributors, dual licensed under the Apache
+License 2.0 and the BSD 3-Clause license. https://github.com/pyca/cryptography
+
+## argon2-cffi
+
+Used for Argon2id in the vault. Copyright (c) 2015 Hynek Schlawack and the argon2-cffi contributors, MIT license.
+https://github.com/hynek/argon2-cffi. It includes the Argon2 reference implementation (CC0 1.0 / Apache License 2.0).
+
+## Tag list
+
+`assets\tags\danbooru.csv` is the Danbooru tag list from a1111-sd-webui-tagcomplete,
+Copyright (c) 2022 Dominik Reh, MIT license. https://github.com/DominikDoom/a1111-sd-webui-tagcomplete
+
+## Downloaded only when you set up the prompt helper
+
+These are not included. If you set up the prompt helper in Settings, Better Comfy downloads them to the folder you pick
+and checks them against a fixed SHA-256 checksum.
+
+- llama.cpp (the runtime, Windows CPU build), MIT license. https://github.com/ggml-org/llama.cpp
+- Qwen3.5 0.8B, 2B or 4B in GGUF format, Apache License 2.0. Models by the Qwen team,
+  https://huggingface.co/Qwen, converted by Unsloth, https://huggingface.co/unsloth
+
 ## Python
 
 Better Comfy includes the Python runtime. Copyright (c) 2001 Python Software Foundation, PSF License Agreement.

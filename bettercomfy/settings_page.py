@@ -10,7 +10,8 @@ from PySide6.QtWidgets import QColorDialog, QFileDialog, QHBoxLayout, QLabel, QL
 from . import comfy, icons, system, theme as T
 from .config import APP_NAME, BASE, VERSION, cfg, resource
 from .queue_page import AFTER
-from .widgets import (Combo, Card, Scroll, Segmented, Slider, ToggleRow, button, field, hrow, label, set_combo, vcol)
+from .widgets import (ChipBox, Combo, Card, Scroll, Segmented, Slider, ToggleRow, button, chip, field, hrow, label,
+                      set_combo, vcol)
 
 
 class SettingsPage(QWidget):
@@ -18,6 +19,7 @@ class SettingsPage(QWidget):
     subtitle = "ComfyUI, folders, queue, look & feel"
     accent_changed = Signal()
     _drive_found = Signal(str)
+    _privacy_found = Signal(str)
 
     def __init__(self, app):
         super().__init__()
@@ -149,14 +151,78 @@ class SettingsPage(QWidget):
         c.add(self.v_state, hrow(self.v_make, self.v_lock, self.v_pw, None, self.v_del, spacing=4),
               field("Lock when idle", self.autolock, "No mouse or keyboard for that long locks it. It waits while the "
                                                      "queue is working or a vault video plays.", label_w=110),
-              ToggleRow("Lock when minimized", "Once the queue is done, if it is still working", cfg.get("vault_lock_minimized", True),
-                        lambda v: cfg.set("vault_lock_minimized", v)),
-              ToggleRow("Hide the window from screenshots", "While the vault is open, screenshots, recordings and "
-                                                            "screen sharing show the window black",
-                        cfg.get("vault_hide_capture", True),
-                        lambda v: (cfg.set("vault_hide_capture", v), self.app._capture_guard())))
+              ToggleRow("Lock when minimized", "Once the queue is done, if it is still working",
+                        cfg.get("vault_lock_minimized", True), lambda v: cfg.set("vault_lock_minimized", v)))
         right.addWidget(c)
         self.vault_status()
+
+        # ---------------------------------------------------------------- privacy
+        c = Card("Privacy")
+        c.add(ToggleRow("Block screen capture", "Screenshots, recordings and screen sharing can't see any window of "
+                                                "Better Comfy", cfg.get("capture_block_app", False),
+                        lambda v: (cfg.set("capture_block_app", v), self.app._capture_guard())),
+              ToggleRow("Block screen capture while the vault is open", "The same, only while the vault is unlocked",
+                        cfg.get("vault_hide_capture", True),
+                        lambda v: (cfg.set("vault_hide_capture", v), self.app._capture_guard())),
+              ToggleRow("Clear ComfyUI's memory after private jobs", "Once the queue is done, no private picture stays "
+                                                                     "in ComfyUI's cache. The models load again for "
+                                                                     "the next job.",
+                        cfg.get("comfy_forget_private", True), lambda v: cfg.set("comfy_forget_private", v)))
+        self.pc_report = label("", None, wrap=True)
+        self.pc_report.setTextFormat(Qt.TextFormat.RichText)
+        self.pc_check = button("Check again", self._check_pc, "Ghost", "refresh")
+        c.add(label("This PC", "Muted"), self.pc_report, hrow(self.pc_check, None))
+        self._privacy_found.connect(self._show_privacy)
+        self._pc_checked = False
+        right.addWidget(c)
+
+        # ---------------------------------------------------------------- prompt helper
+        c = Card("Prompt helper")
+        self.h_state = label("", "Muted", wrap=True)
+        self.h_setup = button("Set up…", self._helper_setup, "Accent", "sparkle")
+        self.h_open = button("Open folder", lambda: system.open_folder(self._helper_dir()), "Ghost", "folder")
+        self.h_remove = button("Remove…", self._helper_remove, "Ghost", "trash", icon_color="#FF8A8A")
+        self.h_free = Combo()
+        for m, t in ((2, "After 2 minutes unused"), (5, "After 5 minutes unused"), (15, "After 15 minutes unused"),
+                     (0, "Keep it loaded")):
+            self.h_free.addItem(t, m)
+        set_combo(self.h_free, int(cfg.get("helper_free_min", 5)))
+        self.h_free.currentIndexChanged.connect(lambda _=0: cfg.set("helper_free_min", self.h_free.currentData()))
+        self.tag_mode = Segmented([("auto", "Auto", "For models that use tags (Illustrious, Pony, Anima, SD 1.5)"),
+                                   ("on", "Always"), ("off", "Off")],
+                                  lambda v: cfg.set("tag_suggest", v), cfg.get("tag_suggest", "auto"), height=30)
+        c.add(self.h_state, hrow(self.h_setup, self.h_open, None, self.h_remove, spacing=4),
+              ToggleRow("Show the helper button", "The sparkle next to the prompt", cfg.get("helper_button", True),
+                        self._helper_button),
+              field("Free its memory", self.h_free, "It loads again by itself the next time (a few seconds).",
+                    label_w=110),
+              field("Tag suggestions", self.tag_mode, "While typing a prompt: Tab or Enter takes a suggestion.",
+                    label_w=110))
+        right.addWidget(c)
+        self.helper_status()
+
+        # ---------------------------------------------------------------- tag blacklist
+        c = Card("Tag blacklist")
+        self.bl_info = label("", "Faint", wrap=True)
+        self.bl_edit = QLineEdit()
+        self.bl_edit.setPlaceholderText("Add tags, separated by commas")
+        self.bl_edit.setMinimumHeight(34)
+        self.bl_edit.returnPressed.connect(self._bl_add)
+        from PySide6.QtCore import QStringListModel
+        from PySide6.QtWidgets import QCompleter
+        self._bl_model = QStringListModel()
+        comp = QCompleter(self._bl_model, self.bl_edit)
+        comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        comp.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        comp.activated.connect(self._bl_pick)
+        self.bl_edit.setCompleter(comp)
+        self.bl_edit.textEdited.connect(self._bl_suggest)
+        self.bl_box = ChipBox(4)
+        self.bl_clear = button("Clear all", self._bl_clear_all, "Ghost", "trash", icon_color="#FF8A8A")
+        c.add(self.bl_info, hrow(self.bl_edit, button("Add", self._bl_add, "Ghost", "plus"), spacing=6), self.bl_box,
+              hrow(None, self.bl_clear))
+        right.addWidget(c)
+        self._bl_fill()
 
         # ---------------------------------------------------------------- queue
         c = Card("Queue")
@@ -220,7 +286,8 @@ class SettingsPage(QWidget):
 
         # ---------------------------------------------------------------- updates
         c = Card("Updates")
-        self.t_upd = ToggleRow("Look for new versions", "Asks GitHub every few hours. That is the only thing Better "
+        self.t_upd = ToggleRow("Look for new versions", "Asks GitHub every few hours. Apart from the prompt helper "
+                                                       "download you start yourself, that is the only thing Better "
                                                        "Comfy does online.", cfg.get("check_updates"),
                                lambda v: cfg.set("check_updates", v))
         self.upd_status = label("", "Muted", wrap=True)
@@ -396,6 +463,143 @@ class SettingsPage(QWidget):
         self.check_body.setText("<table>" + "".join(rows) + "</table>" +
                                 (f"<p style='color:{T.TEXT3}; font-size:12px'>Lists {src}.</p>" if src else ""))
 
+    # ---- privacy check (only reads how Windows is set up)
+    def _check_pc(self):
+        self.pc_check.setEnabled(False)
+        self.pc_report.setText("Checking…")
+        threading.Thread(target=lambda: self._privacy_found.emit(self._privacy_report()), daemon=True).start()
+
+    def _show_privacy(self, html):
+        self.pc_report.setText(html)
+        self.pc_check.setEnabled(True)
+
+    @staticmethod
+    def _privacy_report():
+        lines = []
+        sysdrive = (os.environ.get("SystemDrive") or "C:").upper()
+        places = {}
+        for what, path in (("Windows: page file, hibernation, thumbnails", sysdrive + "\\"),
+                           ("your pictures", cfg.get("image_dir")), ("your videos", cfg.get("video_dir")),
+                           ("the app's data and the vault", BASE)):
+            d = os.path.splitdrive(os.path.abspath(path or sysdrive + "\\"))[0].upper()
+            if d:
+                places.setdefault(d, []).append(what)
+        states = {}
+        for d, whats in places.items():
+            st = states[d] = system.drive_encryption(d + "\\")
+            text = {"on": "encrypted", "paused": "encryption paused (BitLocker is suspended, its key lies readable "
+                                                 "on the drive)",
+                    "off": "not encrypted", None: "encryption unknown"}[st]
+            lines.append((st == "on", f"Drive {d} ({', '.join(whats)}): {text}"))
+        if states.get(sysdrive) != "on":
+            pf = system.pagefile_encrypted()
+            lines.append((pf, "Page file encrypted" if pf else
+                          "Page file not encrypted: memory Windows moves to the drive is stored readable"))
+            if system.hibernation_on():
+                lines.append((False, "Hibernation is on: when the PC hibernates, its memory (an open vault too) is "
+                                     "written to the drive"))
+        for what, path in (("pictures", cfg.get("image_dir")), ("videos", cfg.get("video_dir")),
+                           ("app data and vault", BASE)):
+            svc = system.cloud_synced(path)
+            if svc:
+                lines.append((False, f"The {what} folder is synced with {svc}: what is saved there is uploaded"))
+        out = []
+        for ok, t in lines:
+            col = T.GOOD if ok else T.WARN
+            out.append(f"<span style='color:{col}'>●</span>&nbsp; {t}")
+        if any(s != "on" for s in states.values()):
+            out.append(f"<span style='color:{T.TEXT3}'>Drive encryption (BitLocker, or Device encryption in Windows "
+                       "Settings, Privacy &amp; security) covers everything Windows keeps on its own: the page file, "
+                       "hibernation, thumbnails and leftovers of deleted files on SSDs. Better Comfy does not change "
+                       "these settings.</span>")
+        return "<br>".join(out)
+
+    # ---- tag blacklist
+    def _bl_fill(self):
+        from . import tags
+        items = sorted(tags.blacklist())
+        self.bl_box.clear()
+        for t in items:
+            self.bl_box.add(chip(f"{t}   ×", lambda t=t: self._bl_remove(t), False, "Take it off the blacklist"))
+        self.bl_info.setText((f"{len(items)} tag{'s' if len(items) != 1 else ''}. " if items else "Empty. ") +
+                             "Tags here, and tags that contain them (thighhighs: also white thighhighs), are never "
+                             "suggested while typing and never added by the prompt helper. What you type yourself "
+                             "always stays in your prompt.")
+        self.bl_clear.setVisible(bool(items))
+        self.bl_box.setVisible(bool(items))
+
+    def _bl_suggest(self, text):
+        from . import tags
+        part = text.split(",")[-1].strip()
+        if not tags.ready():
+            tags.load()
+        head = text[:len(text) - len(text.split(",")[-1])]
+        self._bl_model.setStringList([head + (" " if head else "") + t for t, _k, _c, _a in tags.search(part)]
+                                     if len(part) >= 2 else [])
+
+    def _bl_pick(self, text):
+        self.bl_edit.setText(text)
+        self._bl_add()
+
+    def _bl_add(self):
+        from . import tags
+        new = [x for x in self.bl_edit.text().split(",") if tags.norm(x)]
+        if not new:
+            return
+        tags.set_blacklist(list(tags.blacklist()) + new)
+        self.bl_edit.clear()
+        self._bl_fill()
+
+    def _bl_remove(self, t):
+        from . import tags
+        tags.set_blacklist([x for x in tags.blacklist() if x != t])
+        self._bl_fill()
+
+    def _bl_clear_all(self):
+        from . import tags
+        if QMessageBox.question(self, "Tag blacklist", "Take every tag off the blacklist?") == \
+                QMessageBox.StandardButton.Yes:
+            tags.set_blacklist([])
+            self._bl_fill()
+
+    # ---- prompt helper
+    def _helper_dir(self):
+        from . import assistant
+        return assistant.folder()
+
+    def helper_status(self):
+        from . import assistant
+        if assistant.ready():
+            t = f"Ready: {assistant.model_name()}  ·  {assistant.folder()}"
+        else:
+            t = ("Not set up. It improves and writes prompts with a small language model on your processor. "
+                 "Optional: about 0.5 to 2.6 GB, downloaded once to a folder you pick.")
+        self.h_state.setText(t)
+        self.h_setup.setText("Change model…" if assistant.ready() else "Set up…")
+        self.h_open.setVisible(os.path.isdir(assistant.folder()))
+        self.h_remove.setVisible(os.path.isdir(assistant.folder()))
+
+    def _helper_setup(self):
+        from .helper_ui import setup
+        if setup(self):
+            self.app.toast("The prompt helper is ready: the sparkle next to a prompt.", "ok")
+        self.helper_status()
+
+    def _helper_remove(self):
+        from . import assistant
+        if QMessageBox.question(self, "Prompt helper", f"Delete the prompt helper's runtime and the models it "
+                                                       f"downloaded from\n{assistant.folder()}?") != \
+                QMessageBox.StandardButton.Yes:
+            return
+        assistant.remove()
+        self.helper_status()
+        self.app.toast("The prompt helper is removed.", "info")
+
+    def _helper_button(self, on):
+        cfg.set("helper_button", on)
+        for k in ("image", "video"):
+            self.app.pages[k].prompt.refresh_helper()
+
     # ---- vault
     def vault_status(self):
         from .vault import vault
@@ -420,8 +624,14 @@ class SettingsPage(QWidget):
 
     def _vault_pw(self):
         from . import vault_ui
-        if vault_ui.ChangePasswordDialog(self).exec():
-            self.app.toast("Vault password changed.", "ok")
+        d = vault_ui.ChangePasswordDialog(self)
+        if d.exec():
+            if d.result_value:
+                vault_ui.RecoveryKeyDialog(self, d.result_value).exec()
+                self.app.pages["gallery"].vault_changed()
+                self.app.toast("Password changed and everything re-encrypted with a new key.", "ok")
+            else:
+                self.app.toast("Vault password changed.", "ok")
 
     def _vault_destroy(self):
         from PySide6.QtWidgets import QInputDialog
@@ -441,6 +651,10 @@ class SettingsPage(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         self.vault_status()
+        self.helper_status()
+        if not self._pc_checked:
+            self._pc_checked = True
+            self._check_pc()
 
     def _del_mode(self, mode, save=True):
         from . import shred

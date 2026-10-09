@@ -6,6 +6,10 @@ AES-256-GCM in 1 MiB chunks: each chunk is authenticated with its number and whe
 reordered or cut off file is refused instead of shown. The list of what is inside (names, prompts, settings, sizes)
 is encrypted the same way. Files are only ever decrypted into memory, never to disk.
 
+From the outside the vault shows little: every file is padded to a size step (Padme, at most about 12 % larger), so
+its size says little about what it is, and all of its files carry the same fixed date, so nobody can tell when
+something was added. "Re-encrypt" (with a password change) moves everything to a new key and shreds the old files.
+
 Limits, said plainly: while the vault is open its key and what you look at are in memory, and Windows may page memory
 to disk. Malware running as you, or someone with your password or recovery key, gets in."""
 import base64
@@ -84,6 +88,73 @@ def _norm_recovery(rk):
 
 
 # ------------------------------------------------------------------------------------------------ file format
+
+def padme(n):
+    """The padded size for n bytes (Padme: sizes leak only a few bits, at most about 12 % overhead)."""
+    n = max(n, 4096)
+    e = n.bit_length() - 1
+    s_ = e.bit_length()
+    low = e - s_
+    mask = (1 << low) - 1 if low > 0 else 0
+    return (n + mask) & ~mask
+
+
+def _padded(chunks, size):
+    """The chunks, then zeros up to the padded size."""
+    for c in chunks:
+        yield c
+    left = padme(size) - size
+    while left > 0:
+        k = min(left, CHUNK)
+        yield bytes(k)
+        left -= k
+
+
+class _reading:
+    """Opens a vault file for reading and gives it its fixed date back afterwards (Windows notes every read)."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        self.fh = open(self.path, "rb")
+        return self.fh
+
+    def __exit__(self, *exc):
+        self.fh.close()
+        fix_times(self.path)
+        fix_times(os.path.dirname(self.path))
+        return False
+
+
+FIXED_TIME = 1577836800                 # 2020-01-01: every vault file carries this date, so none says when it came
+
+
+def fix_times(path):
+    """Creation, change and access date all set to FIXED_TIME (folders too)."""
+    try:
+        os.utime(path, (FIXED_TIME, FIXED_TIME))
+    except OSError:
+        pass
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                                  wintypes.DWORD, wintypes.HANDLE]
+        k.SetFileTime.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        h = k.CreateFileW(path, 0x100, 7, None, 3, 0x02000000, None)    # WRITE_ATTRIBUTES, BACKUP_SEMANTICS
+        if h in (None, wintypes.HANDLE(-1).value):
+            return
+        ft = ctypes.c_uint64((FIXED_TIME + 11644473600) * 10_000_000)
+        k.SetFileTime(h, ctypes.byref(ft), ctypes.byref(ft), ctypes.byref(ft))
+        k.CloseHandle(h)
+    except Exception:
+        pass
 
 def _file_key(vault_key, blob_id):
     return HKDF(algorithm=hashes.SHA256(), length=32, salt=blob_id.encode("ascii"),
@@ -206,6 +277,7 @@ class Vault:
         return rk
 
     def _head(self):
+        self._finish_swap()
         try:
             with open(HEADER, "r", encoding="utf-8") as fh:
                 return json.load(fh)
@@ -258,45 +330,66 @@ class Vault:
             self.parked.append((data, meta, thumb))
 
     # ---- the index (encrypted list of what is inside)
-    def _load_index(self):
+    def _load_index(self, key=None):
         if not os.path.isfile(INDEX):
             return []
-        with open(INDEX, "rb") as fh:
-            data = b"".join(decrypt_stream(self._key, "index", fh))
+        with _reading(INDEX) as fh:
+            data = b"".join(decrypt_stream(key or self._key, "index", fh)).rstrip(b"\0")
         return json.loads(data.decode("utf-8")).get("entries", [])
 
-    def _save_index(self):
+    def _write_index(self, path, key, entries):
         os.makedirs(DIR, exist_ok=True)
-        tmp = INDEX + ".tmp"
-        data = json.dumps({"entries": self.entries}, ensure_ascii=False).encode("utf-8")
-        with open(tmp, "wb") as fh:
-            encrypt_stream(self._key, "index", iter([data]), fh)
+        data = json.dumps({"entries": entries}, ensure_ascii=False).encode("utf-8")
+        with open(path, "wb") as fh:
+            encrypt_stream(key, "index", _padded(iter([data]), len(data)), fh)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, INDEX)
+        fix_times(path)
+
+    def _save_index(self):
+        self._write_index(INDEX + ".tmp", self._key, self.entries)
+        os.replace(INDEX + ".tmp", INDEX)
+        fix_times(INDEX)
+        fix_times(DIR)
 
     @staticmethod
-    def _write_json(path, obj):
+    def _write_json(path, obj, final=None):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(obj, fh, indent=1)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
+        fix_times(path)
+
+    @staticmethod
+    def _finish_swap():
+        """A re-encryption that was cut off (power loss) between its last two steps is finished here."""
+        if os.path.isfile(HEADER + ".new") and os.path.isfile(INDEX + ".new"):
+            os.replace(INDEX + ".new", INDEX)
+            os.replace(HEADER + ".new", HEADER)
+        else:
+            for f in (HEADER + ".new", INDEX + ".new"):
+                if os.path.isfile(f):
+                    os.remove(f)
 
     # ---- files
     def _need(self):
         if not self.is_open():
             raise VaultError("The vault is locked")
 
-    def _put_blob(self, chunks):
+    def _put_blob(self, chunks, size, key=None):
         blob = uuid.uuid4().hex
         os.makedirs(BLOBS, exist_ok=True)
         path = os.path.join(BLOBS, blob + ".bcv")
         with open(path + ".tmp", "wb") as fh:
-            encrypt_stream(self._key, blob, chunks, fh)
+            encrypt_stream(key or self._key, blob, _padded(chunks, size), fh)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(path + ".tmp", path)
+        fix_times(path)
+        fix_times(BLOBS)
         return blob
 
     def add(self, data, meta, thumb=None):
@@ -317,34 +410,103 @@ class Vault:
         with self._lock:
             self._need()
             e = dict(meta)
-            e.update(id=uuid.uuid4().hex[:12], vault=True, blob=self._put_blob(chunks), size=size,
-                     added=time.strftime("%Y-%m-%d %H:%M:%S"))
+            e.update(id=uuid.uuid4().hex[:12], vault=True, blob=self._put_blob(chunks, size), size=size,
+                     added=time.strftime("%Y-%m-%d %H:%M:%S"), pad=1)
             e.setdefault("created", e["added"])
-            e["thumb_blob"] = self._put_blob(iter([thumb])) if thumb else None
+            e["thumb_blob"] = self._put_blob(iter([thumb]), len(thumb)) if thumb else None
+            e["thumb_len"] = len(thumb) if thumb else 0
             for k in ("file", "thumb"):
                 e.pop(k, None)          # no paths of the plain copy inside the vault
             self.entries.append(e)
             self._save_index()
             return e
 
-    def read(self, entry, which="blob"):
+    @staticmethod
+    def _real_len(entry, which):
+        """The size without padding (None: an entry from before padding)."""
+        if not entry.get("pad"):
+            return None
+        return entry.get("size") if which == "blob" else entry.get("thumb_len")
+
+    def read(self, entry, which="blob", key=None):
         """The decrypted bytes of an entry (which: 'blob' or 'thumb_blob'), in memory."""
-        self._need()
+        if key is None:
+            self._need()
         blob = entry.get(which)
         if not blob:
             return None
-        with open(os.path.join(BLOBS, blob + ".bcv"), "rb") as fh:
-            return b"".join(decrypt_stream(self._key, blob, fh))
+        with _reading(os.path.join(BLOBS, blob + ".bcv")) as fh:
+            data = b"".join(decrypt_stream(key or self._key, blob, fh))
+        n = self._real_len(entry, which)
+        return data if n is None else data[:n]
 
     def export(self, entry, dest):
         """Decrypts an entry into a file (for taking it out of the vault)."""
         self._need()
         blob = entry["blob"]
-        with open(os.path.join(BLOBS, blob + ".bcv"), "rb") as fh, open(dest + ".part", "wb") as out:
+        left = self._real_len(entry, "blob")
+        with _reading(os.path.join(BLOBS, blob + ".bcv")) as fh, open(dest + ".part", "wb") as out:
             for b in decrypt_stream(self._key, blob, fh):
+                if left is not None:
+                    b = b[:left]
+                    left -= len(b)
                 out.write(b)
         os.replace(dest + ".part", dest)
         return dest
+
+    def rekey(self, new_password, progress=None):
+        """Re-encrypts everything with a brand new key under a new password, and shreds the old files, so an old
+        copy of the vault and the old password (or recovery key) are of no use any more. Returns the new recovery
+        key. progress(done, total) is called along the way."""
+        from . import shred
+        if len(new_password) < 8:
+            raise VaultError("Use at least 8 characters")
+        with self._lock:
+            self._need()
+            new_key = secrets.token_bytes(32)
+            entries, made, old = [], [], []
+            total = len(self.entries)
+            try:
+                for i, e in enumerate(self.entries):
+                    e2 = dict(e, pad=1)
+                    data = self.read(e, "blob")
+                    e2["blob"] = self._put_blob(iter([data]), len(data), new_key)
+                    made.append(e2["blob"])
+                    if e.get("thumb_blob"):
+                        th = self.read(e, "thumb_blob")
+                        e2["thumb_blob"] = self._put_blob(iter([th]), len(th), new_key)
+                        e2["thumb_len"] = len(th)
+                        made.append(e2["thumb_blob"])
+                    old += [b for b in (e.get("blob"), e.get("thumb_blob")) if b]
+                    entries.append(e2)
+                    if progress:
+                        progress(i + 1, total)
+            except Exception:
+                for b in made:                          # nothing changed: the new copies go again
+                    try:
+                        os.remove(os.path.join(BLOBS, b + ".bcv"))
+                    except OSError:
+                        pass
+                raise
+            rk = new_recovery_key()
+            salt, rsalt = secrets.token_bytes(16), secrets.token_bytes(16)
+            head = dict(self._head(), version=1, kdf=dict(KDF, salt=_b64(salt)),
+                        key=_wrap(_kdf(new_password, salt), new_key, b"password"),
+                        recovery={"kdf": dict(KDF, salt=_b64(rsalt)),
+                                  "key": _wrap(_kdf(_norm_recovery(rk), rsalt), new_key, b"recovery")})
+            self._write_index(INDEX + ".new", new_key, entries)
+            self._write_json(HEADER + ".new", head)
+            # the old header holds the old key: overwritten where it lies before the new one takes its place
+            for f in (HEADER, INDEX):
+                try:
+                    shred.overwrite(f, 1)
+                except OSError:
+                    pass
+            self._finish_swap()
+            self._key, self.entries = new_key, entries
+        for b in old:
+            shred.shred_file(os.path.join(BLOBS, b + ".bcv"))
+        return rk
 
     def get(self, eid):
         return next((e for e in self.entries if e["id"] == eid), None)

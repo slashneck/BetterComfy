@@ -190,6 +190,9 @@ class Window(QMainWindow):
         self._moved.connect(self._moved_done)
         self._vt = QTimer(self, interval=15000, timeout=self._vault_tick)
         self._vt.start()
+        from . import assistant
+        self._ht = QTimer(self, interval=30000, timeout=assistant.helper.idle_stop)      # the helper's memory back
+        self._ht.start()
         self._views = []
         for i, (k, _t, _i) in enumerate(PAGES + BOTTOM):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda k=k: self.go(k))
@@ -333,6 +336,11 @@ class Window(QMainWindow):
             self.pages["gallery"].vault_changed()
 
     def _queue_done(self, made):
+        if getattr(self, "_private_ran", False) and cfg.get("comfy_forget_private", True):
+            # nothing of a private job stays in ComfyUI's memory (its cache of pictures goes with the models)
+            self._private_ran = False
+            url = self.link.url()
+            threading.Thread(target=lambda: comfy.Client(url).free(), daemon=True).start()
         if not made:
             return
         if cfg.get("sound_done"):
@@ -380,6 +388,10 @@ class Window(QMainWindow):
     def _job_done(self, jid):
         self._prune_memory()
         j = self.queue.job(jid)
+        if j:
+            from .jobs import is_private
+            if is_private(j.get("params") or {}):
+                self._private_ran = True
         if j and j["kind"] == "image" and j["params"].get("variants"):
             self.open_compare(jid)
 
@@ -452,13 +464,10 @@ class Window(QMainWindow):
         prune_memory(self.queue, [str(x or "") for x in shown])
 
     def _capture_guard(self):
-        """While the vault is open the window is left out of screen captures and recordings (Settings, Vault)."""
-        try:
-            import ctypes
-            on = vault.is_open() and cfg.get("vault_hide_capture", True)
-            ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x11 if on else 0)
-        except Exception:
-            pass
+        """Every window of the app is left out of screen captures, recordings and screen sharing: always (Settings,
+        Privacy) or while the vault is open (Settings, Vault)."""
+        system.capture_block(cfg.get("capture_block_app", False) or
+                             (vault.is_open() and cfg.get("vault_hide_capture", True)))
 
     def _vault_tick(self):
         if not vault.is_open() or self._queue_busy():
@@ -975,6 +984,8 @@ class Window(QMainWindow):
 
     def _shutdown_cleanup(self):
         vault.lock()
+        from . import assistant
+        assistant.helper.stop()
         self._save_window()
         self.pages["image"]._save()
         cfg.set("video_state", dict(self.pages["video"].p))
@@ -995,6 +1006,15 @@ class Window(QMainWindow):
 
 
 # ==================================================================================================== start
+
+class CaptureGuard(QObject):
+    """Every window that opens (dialogs, menus, popups) gets the screen capture block if it is on."""
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.Type.Show and obj.isWidgetType() and obj.isWindow() and system.capture_blocked():
+            system.guard_window(obj)
+        return False
+
 
 class WheelGuard(QObject):
     """The mouse wheel never changes a setting it happens to be over - it scrolls the page instead."""
@@ -1100,6 +1120,8 @@ def main():
     app.setStyleSheet(T.qss())
     guard = WheelGuard(app)
     app.installEventFilter(guard)
+    cap = CaptureGuard(app)
+    app.installEventFilter(cap)
     win = Window()
     if srv is not None:
         def other():
@@ -1108,6 +1130,7 @@ def main():
                 c.readyRead.connect(win._show)
         srv.newConnection.connect(other)
     win.show()
+    win._capture_guard()                              # the whole app hidden from screen capture, if that is on
     updater.clean_up()
     if "--updated" in argv:
         QTimer.singleShot(1500, lambda: win.toast(f"Updated to Better Comfy {VERSION}.", "ok"))

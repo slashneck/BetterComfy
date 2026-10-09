@@ -189,3 +189,84 @@ def clear_private_clipboard():
     if _private_clip is not None and cb.ownsClipboard():
         cb.clear()
     _private_clip = None
+
+
+_capture_blocked = False
+
+
+def capture_block(on):
+    """On: every window of the app is left out of screenshots, recordings and screen sharing (they show nothing
+    where it is). Windows 10 2004 and newer; older ones show it black."""
+    global _capture_blocked
+    _capture_blocked = bool(on)
+    from PySide6.QtWidgets import QApplication
+    for w in QApplication.topLevelWidgets():
+        if w.isVisible():
+            guard_window(w)
+
+
+def guard_window(w):
+    """Applies the capture block to one window (called for every window as it opens)."""
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.user32.SetWindowDisplayAffinity(int(w.winId()), 0x11 if _capture_blocked else 0)
+    except Exception:
+        pass
+
+
+def capture_blocked():
+    return _capture_blocked
+
+
+# ------------------------------------------------------------------------------------------------ privacy check
+# Only reads how Windows is set up; nothing here changes a setting.
+
+def drive_encryption(path):
+    """'on', 'paused', 'off' or None (unknown): BitLocker / Device encryption of the drive `path` is on."""
+    import re
+    drive = os.path.splitdrive(os.path.abspath(path or "C:\\"))[0]
+    if os.name != "nt" or not re.fullmatch(r"[A-Za-z]:", drive):
+        return None
+    ps = ("(New-Object -ComObject Shell.Application).NameSpace('" + drive + "\').Self."
+          "ExtendedProperty('System.Volume.BitLockerProtection')")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                           text=True, timeout=20, creationflags=_NOWIN)
+        v = r.stdout.strip()
+    except Exception:
+        return None
+    return {"1": "on", "3": "on", "6": "on", "5": "paused", "2": "off", "4": "off", "0": "off"}.get(v)
+
+
+def _hklm(key, name):
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+            return winreg.QueryValueEx(k, name)[0]
+    except Exception:
+        return None
+
+
+def pagefile_encrypted():
+    return bool(_hklm(r"SYSTEM\CurrentControlSet\Control\FileSystem", "NtfsEncryptPagingFile"))
+
+
+def hibernation_on():
+    v = _hklm(r"SYSTEM\CurrentControlSet\Control\Power", "HibernateEnabled")
+    return bool(v) if v is not None else None
+
+
+def cloud_synced(path):
+    """The cloud service a folder is synced with (OneDrive, Dropbox, Google Drive, iCloud, MEGA) or None."""
+    p = os.path.normcase(os.path.abspath(path or ""))
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        root = os.environ.get(var)
+        if root and (p + os.sep).startswith(os.path.normcase(os.path.abspath(root)) + os.sep):
+            return "OneDrive"
+    parts = p.split(os.sep)
+    for hint, name in (("dropbox", "Dropbox"), ("google drive", "Google Drive"), ("my drive", "Google Drive"),
+                       ("iclouddrive", "iCloud"), ("icloud drive", "iCloud"), ("mega", "MEGA")):
+        if hint in parts:
+            return name
+    return None

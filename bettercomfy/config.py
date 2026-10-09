@@ -6,7 +6,7 @@ import sys
 
 APP_NAME = "Better Comfy"
 APP_ID = "BetterComfy"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 REPO = "slashneck/BetterComfy"
 REPO_URL = "https://github.com/" + REPO
 
@@ -51,6 +51,15 @@ DEFAULTS = {
     "delete_mode": "recycle",         # recycle | shred (built-in) | eraser
     "shred_passes": 1,                # 1 is enough on any drive of the last 20 years; 3 for those who want it
     "gallery_sort": "new",
+    "capture_block_app": False,
+    "comfy_forget_private": True,     # after private jobs ComfyUI clears its cache (and unloads the models)       # the whole app is left out of screenshots, recordings and screen sharing
+    "helper_dir": "",                 # where the prompt helper was set up ("" = in the app's data folder)
+    "helper_model": "",
+    "helper_button": True,
+    "helper_free_min": 5,             # minutes unused until its memory is given back, 0 = keep it loaded
+    "helper_threads": 0,              # 0 = half the processor's threads
+    "tag_suggest": "auto",            # auto (for tag based models) | on | off
+    "tag_blacklist": None,            # tags never suggested or added by the helper; None = the starting list
     "vault_autolock": 10,             # minutes without mouse / keyboard, 0 = never
     "vault_lock_minimized": True,
     "vault_hide_capture": True,       # the window is left out of screenshots and recordings while the vault is open

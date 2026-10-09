@@ -72,6 +72,8 @@ class VideoPage(QWidget):
                                  height=96)
         self.prompt.changed.connect(self._prompt_changed)
         self.prompt.submit.connect(lambda: self.generate(self.bar.count.value()))
+        self.prompt.what = "video"
+        self.prompt.style_fn = lambda: "motion" if self.p.get("start_image") else "natural"
         sc.add(self.prompt)
 
         # length & loop

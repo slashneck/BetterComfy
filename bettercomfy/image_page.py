@@ -6,7 +6,7 @@ import os
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QSpinBox, QVBoxLayout, QWidget
 
-from . import jobs, media, workflows as W
+from . import assistant, jobs, media, workflows as W
 from .components import GenerateBar, LoraStack, PromptCard, ResultPane, SeedBox, UserPresets, remember_prompt
 from .config import cfg
 from .widgets import (Combo, AspectPreview, Card, ChipBox, Collapsible, ImageDrop, PresetPicker, Scroll, Segmented, Slider,
@@ -95,8 +95,9 @@ class ImagePage(QWidget):
                                  neg_sub="Typical negatives for this model family, added after yours")
         self.prompt.changed.connect(self._prompt_changed)
         self.prompt.submit.connect(lambda: self.generate(self.bar.count.value()))
+        self.prompt.style_fn = lambda: assistant.style_for(W.family_of(self.p, self._kind()))
         self.quality_tags = ToggleRow("Quality words", "", True, lambda v: self._set("quality_tags", v))
-        self.prompt.body.insertWidget(2, self.quality_tags)
+        self.prompt.body.insertWidget(3, self.quality_tags)       # after the prompt, the helper panel and the tips
         sc.add(self.prompt)
 
         # loras

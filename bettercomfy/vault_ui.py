@@ -201,6 +201,10 @@ class RecoveryKeyDialog(QDialog):
 
 
 class ChangePasswordDialog(_Busy):
+    """A new password - and, if wanted, everything re-encrypted with a new key (then a new recovery key too).
+    result_value: the new recovery key, or None."""
+    _step = Signal(int, int)
+
     def __init__(self, parent):
         super().__init__(parent, "Vault")
         self.v.addWidget(label("Change the vault password", "H2"))
@@ -209,21 +213,33 @@ class ChangePasswordDialog(_Busy):
         self.p2 = self._pw("New password again")
         for w in (self.old, self.p1, self.p2):
             self.v.addWidget(w)
+        self.rekey = ToggleRow("Re-encrypt everything with a new key",
+                               "Slower: every file is rewritten. A copy of the vault made before can then not be "
+                               "opened with the old password or recovery key any more. You get a new recovery key.",
+                               False)
+        self.v.addWidget(self.rekey)
+        self.status = label("", "Faint")
+        self.status.hide()
+        self.v.addWidget(self.status)
         self.v.addWidget(self.error)
         self.v.addWidget(hrow(None, button("Cancel", self.reject, "Ghost"), button("Change", self._go, "Accent")))
+        self._step.connect(lambda d, t: (self.status.show(), self.status.setText(f"Re-encrypting {d} of {t}…")))
 
     def _go(self):
         if self.p1.text() != self.p2.text():
             self.error.setText("The two new passwords are not the same.")
             self.error.show()
             return
-        old, new = self.old.text(), self.p1.text()
+        old, new, rekey = self.old.text(), self.p1.text(), self.rekey.isChecked()
 
         def work():
             # the current password has to be right, even while the vault is open
             from .vault import Vault
             Vault().unlock(old)
+            if rekey:
+                return vault.rekey(new, lambda d, t: self._step.emit(d, t))
             vault.set_password(new)
+            return None
         self._run(work)
 
 

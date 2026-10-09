@@ -1,5 +1,5 @@
-"""Finds new releases on GitHub and installs them. This is the only thing Better Comfy does online, and it can be
-switched off in Settings. An update only swaps the program files named in the release's file list, so settings, the
+"""Finds new releases on GitHub and installs them. Apart from the optional prompt helper download (started by hand in
+Settings), this is the only thing Better Comfy does online, and it can be switched off in Settings. An update only swaps the program files named in the release's file list, so settings, the
 gallery and everything you made are never touched."""
 import hashlib
 import json
