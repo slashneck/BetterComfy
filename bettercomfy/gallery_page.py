@@ -4,7 +4,7 @@ import os
 import threading
 from collections import deque
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem,
@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLa
 from . import icons, theme as T
 from .vault import vault
 from .components import _Loader
-from .widgets import ChipBox, Combo, FileList, Player, Segmented, button, chip, hrow, icon_button, label, nice_name, set_combo
+from .widgets import (ChipBox, Combo, FileList, Player, Segmented, anims_on, button, chip, hrow, icon_button, label,
+                      nice_name, set_combo)
 
 SORTS = [("new", "Newest first"), ("old", "Oldest first"), ("model", "Checkpoint"), ("lora", "LoRA"),
          ("preset", "Preset"), ("type", "Type"), ("size", "Size")]
@@ -61,13 +62,25 @@ class Nav(QListWidget):
     def dragMoveEvent(self, e):
         it = self.itemAt(e.position().toPoint())
         key = it.data(Qt.ItemDataRole.UserRole) if it else None
-        ok = isinstance(key, str) and key.startswith("col:") and not self.page.history.collection(key[4:]).get("smart")
+        sel = self.page._selected()
+        vault_sel = bool(sel) and all(x.get("vault") for x in sel)
+        if isinstance(key, str) and key.startswith("vcol:"):
+            ok = vault_sel
+        else:
+            ok = isinstance(key, str) and key.startswith("col:") and not vault_sel and \
+                not (self.page.history.collection(key[4:]) or {}).get("smart")
         e.acceptProposedAction() if ok else e.ignore()
 
     def dropEvent(self, e):
         it = self.itemAt(e.position().toPoint())
         key = it.data(Qt.ItemDataRole.UserRole) if it else ""
-        if key.startswith("col:"):
+        if key.startswith("vcol:"):
+            from .vault import vault as _v
+            c = _v.collection(key[5:]) if _v.is_open() else None
+            sel = [x for x in self.page._selected() if x.get("vault")]
+            if c and sel:
+                self.page._vcol_set(sel, c, True)
+        elif key.startswith("col:"):
             ids = [x["id"] for x in self.page._selected()]
             self.page.history.set_in_collection(ids, key[4:], True)
             c = self.page.history.collection(key[4:])
@@ -351,6 +364,15 @@ class GalleryPage(QWidget):
         self.nav.addItem(it)
         if cur == "vault":
             self.nav.setCurrentItem(it)
+        if vault.is_open():
+            for c in vault.collections:
+                n = sum(1 for e in vault.entries if c["id"] in (e.get("cols") or []))
+                it = QListWidgetItem(icons.icon("layers", T.accent().name(), 15), f"   {c['name']}   {n}")
+                it.setData(Qt.ItemDataRole.UserRole, "vcol:" + c["id"])
+                it.setToolTip("A vault collection: drop vault pictures here to add them")
+                self.nav.addItem(it)
+                if cur == "vcol:" + c["id"]:
+                    self.nav.setCurrentItem(it)
         head("Collections")
         if not self.history.collections:
             it = QListWidgetItem("None yet")
@@ -378,7 +400,66 @@ class GalleryPage(QWidget):
         return self.history.get(eid) or (vault.get(eid) if vault.is_open() else None)
 
     def vault_changed(self):
-        """Opened, locked or changed: thumbnails decrypted for it go when it locks."""
+        """Opened, locked or changed: thumbnails decrypted for it go when it locks. Its collections slide out from
+        under the Vault entry when it opens, and back in when it locks."""
+        was_open, now_open = getattr(self, "_nav_open", False), vault.is_open()
+        self._nav_open = now_open
+        if was_open and not now_open and anims_on() and self.isVisible():
+            items = self._vcol_items()
+            if items:
+                # pictures and thumbnails go at once; only the collection entries shrink away afterwards
+                self._vault_changed(nav=False)
+                self._slide(items, opening=False, then=self._fill_nav)
+                return
+        self._vault_changed()
+        if now_open and not was_open and anims_on() and self.isVisible():
+            items = self._vcol_items()
+            if items:
+                self._slide(items, opening=True)
+
+    def _vcol_items(self):
+        return [self.nav.item(i) for i in range(self.nav.count())
+                if str(self.nav.item(i).data(Qt.ItemDataRole.UserRole) or "").startswith("vcol:")]
+
+    def _slide(self, items, opening, then=None):
+        """The vault's collections grow out of (or shrink back into) the Vault entry, one after the other."""
+        full = max(24, self.nav.visualItemRect(items[0]).height() or 32)
+        col = QColor(T.TEXT2)
+        n = len(items)
+        lag = 0.35 / max(1, n)
+
+        def step(v):
+            for k, it in enumerate(items):
+                t = min(1.0, max(0.0, (v - k * lag) / (1.0 - lag * (n - 1)) if n > 1 else v))
+                t = t if opening else 1.0 - t
+                try:
+                    it.setSizeHint(QSize(0, int(full * t)))
+                    c = QColor(col)
+                    c.setAlphaF(t)
+                    it.setForeground(c)
+                except RuntimeError:
+                    return
+            self.nav.doItemsLayout()
+        anim = QVariantAnimation(self, startValue=0.0, endValue=1.0, duration=240 + 60 * min(n, 6),
+                                 easingCurve=QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(step)
+        step(0.0)
+
+        def done():
+            for it in items:
+                try:
+                    it.setSizeHint(QSize())             # back to its natural height
+                    it.setData(Qt.ItemDataRole.ForegroundRole, None)
+                except RuntimeError:
+                    pass
+            self.nav.doItemsLayout()
+            if then:
+                then()
+        anim.finished.connect(done)
+        anim.start()
+        self._slide_anim = anim
+
+    def _vault_changed(self, nav=True):
         if not vault.is_open():
             if hasattr(self, "_vthumbs"):
                 self._vgen += 1
@@ -386,7 +467,10 @@ class GalleryPage(QWidget):
                 self._vqueue.clear()
             if self.cur and self.cur.get("vault"):
                 self.cur = None
-        self._fill_nav()
+            if self.place.startswith("vcol:"):
+                self.place = "vault"            # locked: its collections are hidden, the lock panel shows
+        if nav:
+            self._fill_nav()
         if self.isVisible():
             self.fill()
         else:
@@ -396,6 +480,8 @@ class GalleryPage(QWidget):
         p = self.place
         if p == "vault":
             return bool(e.get("vault"))
+        if p.startswith("vcol:"):
+            return bool(e.get("vault")) and p[5:] in (e.get("cols") or [])
         if p in ("fav", "marked"):
             return bool(e.get(p))
         if p in ("image", "video"):
@@ -426,6 +512,24 @@ class GalleryPage(QWidget):
     def _nav_menu(self, pos):
         it = self.nav.itemAt(pos)
         key = it.data(Qt.ItemDataRole.UserRole) if it else None
+        if key == "vault" and vault.is_open():
+            m = QMenu(self)
+            m.addAction(icons.icon("plus", "#A1A1AA", 16), "New vault collection…").triggered.connect(
+                lambda: self._new_vcol())
+            m.exec(self.nav.mapToGlobal(pos))
+            return
+        if key and key.startswith("vcol:") and vault.is_open():
+            c = vault.collection(key[5:])
+            if c:
+                m = QMenu(self)
+                m.addAction("Rename…").triggered.connect(lambda: self._rename_vcol(c))
+                m.addAction(icons.icon("trash", "#FF8A8A", 16), "Delete the collection (keeps its pictures)"
+                            ).triggered.connect(lambda: self._del_vcol(c))
+                m.addSeparator()
+                m.addAction(icons.icon("plus", "#A1A1AA", 16), "New vault collection…").triggered.connect(
+                    lambda: self._new_vcol())
+                m.exec(self.nav.mapToGlobal(pos))
+            return
         if not key or not key.startswith("col:"):
             return
         c = self.history.collection(key[4:])
@@ -434,6 +538,57 @@ class GalleryPage(QWidget):
         m.addAction(icons.icon("trash", "#FF8A8A", 16), "Delete the collection (keeps its pictures)").triggered.connect(
             lambda: self._del_collection(c))
         m.exec(self.nav.mapToGlobal(pos))
+
+    # ---- vault collections
+    def _new_vcol(self, ids=None):
+        name, ok = QInputDialog.getText(self, "New vault collection", "Name:")
+        if not ok or not name.strip() or not vault.is_open():
+            return None
+        c = vault.add_collection(name)
+        if ids:
+            vault.set_in_collection(ids, c["id"], True)
+        self.place = "vcol:" + c["id"]
+        self._fill_nav()
+        self.fill()
+        return c
+
+    def _rename_vcol(self, c):
+        name, ok = QInputDialog.getText(self, "Rename collection", "Name:", text=c["name"])
+        if ok and name.strip():
+            vault.rename_collection(c["id"], name)
+            self._fill_nav()
+
+    def _del_vcol(self, c):
+        if QMessageBox.question(self, "Collection", f"Delete the collection '{c['name']}'? Its pictures and videos stay "
+                                                    "in the vault.") == QMessageBox.StandardButton.Yes:
+            if self.place == "vcol:" + c["id"]:
+                self.place = "vault"
+            vault.remove_collection(c["id"])
+            self._fill_nav()
+            self.fill()
+
+    def _vcol_menu(self, entries, pos=None):
+        """Vault collections for vault pictures: in or out (ticks), or a new one."""
+        if not entries or not vault.is_open():
+            return
+        m = QMenu(self)
+        for c in vault.collections:
+            inside = all(c["id"] in (e.get("cols") or []) for e in entries)
+            a = m.addAction(c["name"])
+            a.setCheckable(True)
+            a.setChecked(inside)
+            a.triggered.connect(lambda _=False, c=c, inside=inside: self._vcol_set(entries, c, not inside))
+        if vault.collections:
+            m.addSeparator()
+        m.addAction(icons.icon("plus", "#A1A1AA", 16), "New vault collection…").triggered.connect(
+            lambda: self._new_vcol([e["id"] for e in entries]))
+        m.exec(pos or self.col_btn.mapToGlobal(self.col_btn.rect().bottomLeft()))
+
+    def _vcol_set(self, entries, c, on):
+        vault.set_in_collection([e["id"] for e in entries], c["id"], on)
+        self._fill_nav()
+        self.fill()
+        self.app.toast(f"{'Added to' if on else 'Taken out of'} {c['name']}.", "ok")
 
     def _rename(self, c):
         name, ok = QInputDialog.getText(self, "Rename collection", "Name:", text=c["name"])
@@ -680,7 +835,7 @@ class GalleryPage(QWidget):
         f = dict(self.flt)
         if self.search.text().strip():
             f["q"] = self.search.text().strip()
-        in_vault = self.place == "vault"
+        in_vault = self.place == "vault" or self.place.startswith("vcol:")
         source = (vault.entries if vault.is_open() else []) if in_vault else self.history.items
         items = [e for e in source if self._in_place(e) and _matches(e, f)]
         items = self._sorted(items)
@@ -820,8 +975,9 @@ class GalleryPage(QWidget):
         self.b["folder"].setVisible(not inv)
         self.b["move_vault"].setVisible(not inv)
         self.b["take_out"].setVisible(inv)
-        for b in (self.fav_btn, self.mark_btn, self.col_btn):
+        for b in (self.fav_btn, self.mark_btn):
             b.setVisible(not inv)
+        self.col_btn.setToolTip("Vault collections" if inv else "Collections")
         if hasattr(self, "multi_row"):
             self._sel_changed()
 
@@ -853,6 +1009,8 @@ class GalleryPage(QWidget):
         entries = entries or self._selected()
         if not entries:
             return
+        if entries[0].get("vault"):
+            return self._vcol_menu([e for e in entries if e.get("vault")], pos)
         m = QMenu(self)
         manual = [c for c in self.history.collections if not c.get("smart")]
         for c in manual:
@@ -936,6 +1094,13 @@ class GalleryPage(QWidget):
                     m.addAction(icons.icon("arrow", "#A1A1AA", 16), "Extend (private)").triggered.connect(
                         lambda: self.app.result_action("extend", e, self))
             m.addSeparator()
+            m.addAction(icons.icon("layers", "#A1A1AA", 16), "Vault collections…").triggered.connect(
+                lambda: self._vcol_menu(sel, self.grid.mapToGlobal(pos)))
+            if self.place.startswith("vcol:"):
+                c = vault.collection(self.place[5:])
+                if c:
+                    m.addAction(icons.icon("close", "#A1A1AA", 16), f"Take out of '{c['name']}'").triggered.connect(
+                        lambda: self._vcol_set(sel, c, False))
             m.addAction(icons.icon("unlock", "#A1A1AA", 16), f"Take out of the vault{f' ({len(sel)})' if many else ''}"
                         ).triggered.connect(lambda: self.app.take_out_of_vault(sel))
             m.addAction(icons.icon("trash", "#FF8A8A", 16), f"Delete{f' {len(sel)} items' if many else ''}"

@@ -570,7 +570,7 @@ class Window(QMainWindow):
                     with open(thumb, "wb") as fh:
                         fh.write(tb)
                 h = {k: v for k, v in e.items() if k not in ("id", "vault", "blob", "thumb_blob", "size", "added",
-                                                                "name", "fmt")}
+                                                                "name", "fmt", "cols")}
                 if isinstance(h.get("params"), dict):
                     h["params"] = {k: v for k, v in h["params"].items() if k != "private"}
                 h.update(file=path, thumb=thumb)

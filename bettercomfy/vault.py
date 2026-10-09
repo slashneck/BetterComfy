@@ -223,6 +223,7 @@ class Vault:
     def __init__(self):
         self._key = None
         self.entries = []
+        self.collections = []           # [{"id", "name"}] - kept in the encrypted index like everything else
         self._lock = threading.RLock()
         self.unlocked_at = 0.0
         self.parked = []                # results made while the vault was locked: only in memory until it opens
@@ -239,6 +240,7 @@ class Vault:
         with self._lock:
             self._key = None
             self.entries = []
+            self.collections = []
 
     def destroy(self):
         """Deletes the whole vault. The header with the wrapped keys is shredded first: without it nothing in there
@@ -320,6 +322,7 @@ class Vault:
         with self._lock:
             self._key = key
             self.entries = self._load_index()
+            self.collections = self._index_collections
             self.unlocked_at = time.time()
             parked, self.parked = self.parked, []
         for data, meta, thumb in parked:
@@ -331,15 +334,19 @@ class Vault:
 
     # ---- the index (encrypted list of what is inside)
     def _load_index(self, key=None):
+        self._index_collections = []
         if not os.path.isfile(INDEX):
             return []
         with _reading(INDEX) as fh:
             data = b"".join(decrypt_stream(key or self._key, "index", fh)).rstrip(b"\0")
-        return json.loads(data.decode("utf-8")).get("entries", [])
+        d = json.loads(data.decode("utf-8"))
+        self._index_collections = list(d.get("collections") or [])
+        return d.get("entries", [])
 
-    def _write_index(self, path, key, entries):
+    def _write_index(self, path, key, entries, collections=None):
         os.makedirs(DIR, exist_ok=True)
-        data = json.dumps({"entries": entries}, ensure_ascii=False).encode("utf-8")
+        cols = self.collections if collections is None else collections
+        data = json.dumps({"entries": entries, "collections": cols}, ensure_ascii=False).encode("utf-8")
         with open(path, "wb") as fh:
             encrypt_stream(key, "index", _padded(iter([data]), len(data)), fh)
             fh.flush()
@@ -531,6 +538,45 @@ class Vault:
                 if b:
                     shred.shred_file(os.path.join(BLOBS, b + ".bcv"))
         return len(gone)
+
+    # ---- collections (only while open; their names are as private as the rest)
+    def collection(self, cid):
+        return next((c for c in self.collections if c["id"] == cid), None)
+
+    def add_collection(self, name):
+        with self._lock:
+            self._need()
+            c = {"id": uuid.uuid4().hex[:10], "name": name.strip()[:80] or "Collection"}
+            self.collections.append(c)
+            self._save_index()
+            return c
+
+    def rename_collection(self, cid, name):
+        with self._lock:
+            c = self.collection(cid)
+            if c and name.strip():
+                c["name"] = name.strip()[:80]
+                self._save_index()
+
+    def remove_collection(self, cid):
+        """The collection goes, everything that was in it stays in the vault."""
+        with self._lock:
+            self._need()
+            self.collections = [c for c in self.collections if c["id"] != cid]
+            for e in self.entries:
+                if cid in (e.get("cols") or []):
+                    e["cols"] = [x for x in e["cols"] if x != cid]
+            self._save_index()
+
+    def set_in_collection(self, eids, cid, on):
+        with self._lock:
+            self._need()
+            ids = set(eids)
+            for e in self.entries:
+                if e["id"] in ids:
+                    cols = [x for x in (e.get("cols") or []) if x != cid]
+                    e["cols"] = cols + [cid] if on else cols
+            self._save_index()
 
     def recent(self, kind=None):
         out = [e for e in self.entries if kind is None or e.get("kind") == kind]
