@@ -220,7 +220,8 @@ def write_gif(frames, fps, path, max_side=720):
         mosaic.paste(im.resize((tw, th), Image.BILINEAR), (i * tw, 0))
     pal = mosaic.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
     qs = [im.quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG) for im in ims]
-    qs[0].save(path, save_all=True, append_images=qs[1:], duration=max(20, int(round(1000 / float(fps)))), loop=0,
+    qs[0].save(path, format="GIF", save_all=True, append_images=qs[1:], duration=max(20, int(round(1000 / float(fps)))),
+               loop=0,
                disposal=1, optimize=False)
     return path
 
@@ -231,6 +232,106 @@ def write_video(frames, fps, path, fmt="mp4", crf=16):
     if fmt == "webm":
         return write_webm(frames, fps, path, crf)
     return write_mp4(frames, fps, path, crf)
+
+
+def _ffmpeg_pipe(args, data_in=None, feed=None):
+    """Runs FFmpeg with stdin and stdout as pipes (nothing touches the disk). feed: an iterator of input bytes."""
+    import subprocess
+    import threading
+    import imageio_ffmpeg
+    p = subprocess.Popen([imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error"] + args,
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         creationflags=0x08000000)
+    out, err = [], []
+
+    def reader():
+        out.append(p.stdout.read())
+
+    def ereader():
+        err.append(p.stderr.read())
+    t1, t2 = threading.Thread(target=reader, daemon=True), threading.Thread(target=ereader, daemon=True)
+    t1.start()
+    t2.start()
+    try:
+        if data_in is not None:
+            p.stdin.write(data_in)
+        for b in feed or ():
+            p.stdin.write(b)
+        p.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+    p.wait()
+    t1.join()
+    t2.join()
+    if p.returncode != 0:
+        raise RuntimeError("FFmpeg: " + (err[0] if err else b"").decode("utf-8", "replace").strip()[:300])
+    return out[0] if out else b""
+
+
+def encode_video_bytes(frames, fps, fmt="mp4", crf=16):
+    """A video in memory (for the vault): the same quality as write_video, nothing written to disk."""
+    if fmt == "gif":
+        buf = io.BytesIO()
+        write_gif(frames, fps, buf)
+        return buf.getvalue()
+    w2, h2 = _even(frames)
+    feed = (np.ascontiguousarray(f[:h2, :w2]).tobytes() for f in frames)
+    src = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w2}x{h2}", "-r", f"{float(fps)}", "-i", "pipe:0"]
+    if fmt == "webm":
+        enc = ["-c:v", "libvpx-vp9", "-crf", str(int(crf) + 8), "-b:v", "0", "-pix_fmt", "yuv420p", "-f", "webm"]
+    else:
+        enc = ["-c:v", "libx264", "-crf", str(int(crf)), "-preset", "slow", "-pix_fmt", "yuv420p",
+               "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4"]
+    return _ffmpeg_pipe(src + enc + ["pipe:1"], feed=feed)
+
+
+def read_video_bytes(data, w, h, max_h=900, fps=16.0):
+    """Frames of a video that is only in memory (vault). w / h: its size (frames come out at that size, scaled
+    down to max_h)."""
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        im = Image.open(io.BytesIO(data))
+        frames, dur = [], []
+        try:
+            while True:
+                f = im.convert("RGB")
+                if f.height > max_h:
+                    s = max_h / f.height
+                    f = f.resize((int(f.width * s), max_h), Image.LANCZOS)
+                frames.append(np.asarray(f))
+                dur.append(im.info.get("duration", 62) or 62)
+                im.seek(im.tell() + 1)
+        except EOFError:
+            pass
+        return frames, 1000.0 / (sum(dur) / max(1, len(dur)))
+    w, h = int(w) - int(w) % 2, int(h) - int(h) % 2
+    if h > max_h:
+        w, h = int(w * max_h / h) // 2 * 2, max_h
+    raw = _ffmpeg_pipe(["-i", "pipe:0", "-vf", f"scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+                       data_in=data)
+    n = len(raw) // (w * h * 3)
+    arr = np.frombuffer(raw[:n * w * h * 3], np.uint8).reshape(n, h, w, 3)
+    return [arr[i] for i in range(n)], fps
+
+
+def thumbnail_bytes(src, side=320):
+    """A small JPEG in memory of an array or picture bytes."""
+    im = Image.fromarray(src) if isinstance(src, np.ndarray) else Image.open(io.BytesIO(src)).convert("RGB")
+    im.thumbnail((side, side), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, "JPEG", quality=88)
+    return buf.getvalue()
+
+
+def png_with_text(data, text=None):
+    """PNG bytes with text chunks added, in memory."""
+    im = Image.open(io.BytesIO(data))
+    info = PngImagePlugin.PngInfo()
+    for k, v in (text or {}).items():
+        if v is not None:
+            info.add_text(k, v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+    buf = io.BytesIO()
+    im.save(buf, "PNG", pnginfo=info, compress_level=4)
+    return buf.getvalue(), im.size
 
 
 def read_video(path, max_h=900, limit=2000):
@@ -293,11 +394,11 @@ def fit(frames, w, h):
     return out
 
 
-def join_clips(paths, tail=None, tail_fps=None):
+def join_clips(paths, tail=None, tail_fps=None, head=None):
     """Clips one after the other (+ new frames at the end) as one: the first clip's size and frame rate. When a clip
     starts on the last frame of the one before (Extend), that repeated frame is left out."""
     allf, fps = [], None
-    parts = [(read_video(p, max_h=100000)) for p in paths]
+    parts = ([head] if head else []) + [(read_video(p, max_h=100000)) for p in paths]
     if tail is not None:
         parts.append((tail, tail_fps))
     for frames, f in parts:

@@ -48,6 +48,12 @@ DEFAULTS = {
     "welcomed": False,                # the first start screen was shown
     "close_to_tray": False,
     "confirm_delete": True,
+    "delete_mode": "recycle",         # recycle | shred (built-in) | eraser
+    "shred_passes": 1,                # 1 is enough on any drive of the last 20 years; 3 for those who want it
+    "gallery_sort": "new",
+    "vault_autolock": 10,             # minutes without mouse / keyboard, 0 = never
+    "vault_lock_minimized": True,
+    "vault_hide_capture": True,       # the window is left out of screenshots and recordings while the vault is open
     # remembered
     "image_state": {},
     "video_state": {},

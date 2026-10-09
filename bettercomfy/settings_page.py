@@ -1,5 +1,6 @@
 """SETTINGS: ComfyUI (found by itself, how it is started), output folders, the queue, the look, shortcuts."""
 import os
+import threading
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
@@ -16,6 +17,7 @@ class SettingsPage(QWidget):
     title = "Settings"
     subtitle = "ComfyUI, folders, queue, look & feel"
     accent_changed = Signal()
+    _drive_found = Signal(str)
 
     def __init__(self, app):
         super().__init__()
@@ -108,6 +110,52 @@ class SettingsPage(QWidget):
               hrow(button("ComfyUI input", lambda: self._open_sub("input"), "Ghost", "folder"),
                    button("ComfyUI output", lambda: self._open_sub("output"), "Ghost", "folder"), None, spacing=4))
         right.addWidget(c)
+
+        # ---------------------------------------------------------------- deleting
+        from . import shred
+        c = Card("Deleting")
+        has_eraser = bool(shred.eraser_path())
+        self.del_mode = Segmented([(k, t, d) for k, t, d in shred.MODES], self._del_mode,
+                                  cfg.get("delete_mode", "recycle"), height=32)
+        self.del_line = label("", "Muted", wrap=True)
+        self.del_drive = label("", "Faint", wrap=True)
+        self.passes = Segmented([("1", "1 pass", "Random data once - enough for any drive of the last 20 years"),
+                                 ("3", "3 passes", "Random data three times - slower, for peace of mind")],
+                                lambda v: cfg.set("shred_passes", int(v)), str(cfg.get("shred_passes", 1)), height=30)
+        self.passes_row = field("Overwrite", self.passes, label_w=90)
+        c.add(self.del_mode, self.del_line, self.passes_row, self.del_drive)
+        if not has_eraser:
+            c.add(label("Eraser isn't installed on this PC, so 'Eraser' uses the built-in shredder.", "Faint",
+                        wrap=True))
+        right.addWidget(c)
+        self._del_mode(cfg.get("delete_mode", "recycle"), save=False)
+        self._drive_found.connect(self._show_drive)
+        threading.Thread(target=lambda: self._drive_found.emit(shred.drive_kind(cfg.get("image_dir"))),
+                         daemon=True).start()
+
+        # ---------------------------------------------------------------- vault
+        c = Card("Vault")
+        self.v_state = label("", "Muted", wrap=True)
+        self.v_make = button("Make the vault", self._vault_open, "Accent", "lock")
+        self.v_lock = button("Lock now", lambda: (self.app.lock_vault(), self.vault_status()), "Ghost", "lock")
+        self.v_pw = button("Change password", self._vault_pw, "Ghost", "edit")
+        self.v_del = button("Delete the vault…", self._vault_destroy, "Ghost", "trash", icon_color="#FF8A8A")
+        self.autolock = Combo()
+        for m, t in ((0, "Never"), (5, "After 5 minutes"), (10, "After 10 minutes"), (15, "After 15 minutes"),
+                     (30, "After 30 minutes"), (60, "After an hour")):
+            self.autolock.addItem(t, m)
+        set_combo(self.autolock, int(cfg.get("vault_autolock", 10)))
+        self.autolock.currentIndexChanged.connect(lambda _=0: cfg.set("vault_autolock", self.autolock.currentData()))
+        c.add(self.v_state, hrow(self.v_make, self.v_lock, self.v_pw, None, self.v_del, spacing=4),
+              field("Lock when idle", self.autolock, "No mouse or keyboard for that long locks it.", label_w=110),
+              ToggleRow("Lock when minimized", None, cfg.get("vault_lock_minimized", True),
+                        lambda v: cfg.set("vault_lock_minimized", v)),
+              ToggleRow("Hide the window from screenshots", "While the vault is open, screenshots, recordings and "
+                                                            "screen sharing show the window black",
+                        cfg.get("vault_hide_capture", True),
+                        lambda v: (cfg.set("vault_hide_capture", v), self.app._capture_guard())))
+        right.addWidget(c)
+        self.vault_status()
 
         # ---------------------------------------------------------------- queue
         c = Card("Queue")
@@ -346,6 +394,75 @@ class SettingsPage(QWidget):
         src = {"comfy": "read from the running ComfyUI", "files": "read from its model folders"}.get(L.get("source"), "")
         self.check_body.setText("<table>" + "".join(rows) + "</table>" +
                                 (f"<p style='color:{T.TEXT3}; font-size:12px'>Lists {src}.</p>" if src else ""))
+
+    # ---- vault
+    def vault_status(self):
+        from .vault import vault
+        made, is_open = vault.exists(), vault.is_open()
+        if not made:
+            t = ("No vault yet. It keeps pictures and videos encrypted with your password (Argon2id + AES-256-GCM); "
+                 "they are only ever decrypted in memory, inside this app.")
+        elif is_open:
+            t = f"Unlocked  ·  {len(vault.entries)} item{'s' if len(vault.entries) != 1 else ''} inside."
+        else:
+            t = "Locked."
+        self.v_state.setText(t)
+        self.v_make.setText("Unlock" if made else "Make the vault")
+        self.v_make.setVisible(not is_open)
+        self.v_lock.setVisible(is_open)
+        self.v_pw.setVisible(made)
+        self.v_del.setVisible(made)
+
+    def _vault_open(self):
+        self.app.ensure_vault()
+        self.vault_status()
+
+    def _vault_pw(self):
+        from . import vault_ui
+        if vault_ui.ChangePasswordDialog(self).exec():
+            self.app.toast("Vault password changed.", "ok")
+
+    def _vault_destroy(self):
+        from PySide6.QtWidgets import QInputDialog
+        from .vault import vault
+        word, ok = QInputDialog.getText(
+            self, "Delete the vault",
+            "Everything in the vault is gone for good, and nothing can bring it back.\n"
+            "Take out what you want to keep first.\n\nType DELETE to go on:")
+        if not ok or word.strip() != "DELETE":
+            return
+        self.app.lock_vault(quiet=True)
+        vault.destroy()
+        self.app.pages["gallery"].vault_changed()
+        self.vault_status()
+        self.app.toast("The vault is deleted.", "info")
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.vault_status()
+
+    def _del_mode(self, mode, save=True):
+        from . import shred
+        if save:
+            cfg.set("delete_mode", mode)
+        self.del_line.setText({k: d for k, _t, d in shred.MODES}.get(mode, "") +
+                              ("" if mode == "recycle" else "  Thumbnails, settings files and the gallery entry go "
+                                                            "the same way."))
+        self.passes_row.setVisible(mode == "shred")
+        self._show_drive(getattr(self, "_drive", ""))
+
+    def _show_drive(self, kind):
+        self._drive = kind
+        mode = cfg.get("delete_mode", "recycle")
+        if kind == "SSD" and mode != "recycle":
+            self.del_drive.setText("Your pictures folder is on an SSD. An SSD can keep old copies of data where no "
+                                   "program can overwrite them, so shredding there is very good but not perfect. "
+                                   "Pictures made straight into the vault never reach the drive unencrypted.")
+        elif kind == "HDD" and mode != "recycle":
+            self.del_drive.setText("Your pictures folder is on a hard disk: one pass of random data is enough there.")
+        else:
+            self.del_drive.setText("")
+        self.del_drive.setVisible(bool(self.del_drive.text()))
 
     def update_state(self):
         from . import updater

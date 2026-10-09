@@ -40,6 +40,7 @@ class VideoPage(QWidget):
         self.bar = GenerateBar("video", [("Animate several pictures…", "image", self.batch_files),
                                          ("Animate a whole folder…", "folder", self.batch_folder)])
         self.bar.generate.connect(self.generate)
+        self.bar.private_changed.connect(lambda on: self._set("private", on))
         sv.addWidget(self.bar)
 
         # my presets
@@ -276,6 +277,7 @@ class VideoPage(QWidget):
         quiet(self.custom, self.custom.setValue, int(p.get("custom_size") or 0))
         self.seed.set(p.get("seed", -1))
         self.loras.set_items(p.get("loras") or [])
+        self.bar.set_private(p.get("private", False))
         for k, b in self._aspect_btns.items():
             quiet(b, b.setChecked, k == p.get("aspect", "2:3"))
         self._loading = False
@@ -389,7 +391,13 @@ class VideoPage(QWidget):
 
     # ------------------------------------------------------------------ the summary
     def _aspect_now(self):
-        sz = media.image_size(self.p["start_image"]) if self.p.get("start_image") else None
+        sz = None
+        if self.p.get("start_image"):
+            try:
+                from .jobs import ref_size
+                sz = ref_size(self.p["start_image"])
+            except Exception:
+                sz = None
         return sz[0] / sz[1] if sz else 2 / 3
 
     def _update(self):
@@ -440,7 +448,12 @@ class VideoPage(QWidget):
         p = copy.deepcopy(self.p)
         p["count"] = int(count)
         mode = W.video_mode(p)
-        if mode == "i2v" and not os.path.isfile(p.get("start_image", "")):
+        from .jobs import ref_ok
+        try:
+            ok = ref_ok(p.get("start_image"))
+        except Exception:
+            ok = False
+        if mode == "i2v" and not ok:
             self.toast.emit("The start picture is missing - drop one in again.", "warn")
             return
         if mode == "t2v" and not (p.get("prompt") or "").strip():
@@ -449,16 +462,26 @@ class VideoPage(QWidget):
         if p.get("loop") == "pair" and mode == "i2v" and not p.get("end_image"):
             self.toast.emit("Start→End needs an end picture (or pick another loop mode).", "warn")
             return
-        remember_prompt(p.get("prompt"))
+        from .jobs import is_private
+        private = is_private(p)
+        if private and not self.app.ensure_vault("Unlock the vault: private videos go straight into it."):
+            return
+        if not private:
+            remember_prompt(p.get("prompt"))
         pl = W.video_plan(self._resolved(), self._aspect_now())
-        title = (p.get("prompt") or "").strip().replace("\n", " ")[:70] or nice_name(p.get("start_image")) or "Video"
-        self.queue.add("video", p, title, thumb=p.get("start_image") or None, units=W.work_units("video", pl, count))
+        title = "Private video" if private else ((p.get("prompt") or "").strip().replace("\n", " ")[:70] or
+                                                 nice_name(p.get("start_image")) or "Video")
+        self.queue.add("video", p, title, thumb=None if private else (p.get("start_image") or None),
+                       units=W.work_units("video", pl, count))
         self.bar.flash()
         if not self.link.running() and cfg.get("auto_start"):
             self.toast.emit("Starting ComfyUI - the first video takes a little longer.", "info")
 
     def set_start(self, path):
         self.start.set_path(path)
+        if str(path).startswith(("vault:", "mem:")):
+            self.bar.set_private(True)
+            self._set("private", True)
         self.toast.emit("Picture set - describe the motion and press Generate.", "ok")
 
     def use_settings(self, params):

@@ -144,3 +144,17 @@ def disk_free(path):
         return shutil.disk_usage(p).free
     except OSError:
         return None
+
+
+def idle_seconds():
+    """How long the mouse and keyboard have not been touched."""
+    if os.name != "nt":
+        return 0.0
+    from ctypes import wintypes
+
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+    li = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
+    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li)):
+        return 0.0
+    return ((ctypes.windll.kernel32.GetTickCount() - li.dwTime) & 0xFFFFFFFF) / 1000.0

@@ -896,6 +896,21 @@ class ImageDrop(QFrame):
         self.clear_btn.hide()
 
     def set_path(self, path, emit=True):
+        if path and str(path).startswith(("vault:", "mem:")):
+            # a picture that only exists encrypted (vault) or in memory: shown, never written anywhere
+            self.path, self.pm = path, QPixmap()
+            try:
+                from .jobs import ref_bytes
+                self.pm.loadFromData(ref_bytes(path))
+            except Exception:
+                self.pm = QPixmap(240, 160)
+                self.pm.fill(QColor(T.SURFACE3))
+            self.clear_btn.setVisible(True)
+            self.setToolTip("A private picture (vault)")
+            self.update()
+            if emit:
+                self.changed.emit(self.path)
+            return
         self.path = path if path and os.path.isfile(path) else ""
         self.pm = QPixmap(self.path) if self.path else None
         if self.pm is not None and self.pm.isNull():

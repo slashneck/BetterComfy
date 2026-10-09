@@ -1,4 +1,5 @@
 """Tools that work on a picture: the mask brush (redraw a part), the upscaler, the settings comparison."""
+import io
 import math
 import os
 import time
@@ -24,8 +25,15 @@ class MaskCanvas(QWidget):
     size_changed = Signal(int)
 
     def __init__(self, path):
+        # path: a file, or a 'vault:' / 'mem:' picture that is only decrypted into memory
         super().__init__()
-        self.img = QImage(path).convertToFormat(QImage.Format.Format_RGB32)
+        if str(path).startswith(("vault:", "mem:")):
+            from .jobs import ref_bytes
+            src = QImage()
+            src.loadFromData(ref_bytes(path))
+        else:
+            src = QImage(path)
+        self.img = src.convertToFormat(QImage.Format.Format_RGB32)
         self.mask = QImage(self.img.size(), QImage.Format.Format_Grayscale8)
         self.mask.fill(0)
         self.overlay = QImage(self.img.size(), QImage.Format.Format_ARGB32_Premultiplied)
@@ -165,8 +173,7 @@ class MaskCanvas(QWidget):
         a = np.frombuffer(m.constBits(), np.uint8, count=bpl * m.height()).reshape(m.height(), bpl)
         return a[:, :m.width()].copy()
 
-    def save_mask(self, path, grow=8, feather=12):
-        """The mask as a picture: grown a little (so edges are redrawn too) and softened (no hard seam)."""
+    def _mask_image(self, grow, feather):
         im = Image.fromarray(self._mask_array(), "L")
         g = int(grow)
         while g > 0:
@@ -175,9 +182,25 @@ class MaskCanvas(QWidget):
             g -= k
         if feather > 0:
             im = im.filter(ImageFilter.GaussianBlur(feather / 2))
+        return im.convert("RGB")
+
+    def save_mask(self, path, grow=8, feather=12):
+        """The mask as a picture: grown a little (so edges are redrawn too) and softened (no hard seam)."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        im.convert("RGB").save(path)
+        self._mask_image(grow, feather).save(path)
         return path
+
+    def mask_bytes(self, grow=8, feather=12):
+        """The same mask, kept in memory (for a private picture)."""
+        buf = io.BytesIO()
+        self._mask_image(grow, feather).save(buf, "PNG")
+        return buf.getvalue()
+
+
+def _title(entry):
+    if entry.get("vault") or str(entry.get("file", "")).startswith("vault:"):
+        return entry.get("name") or "Private picture"
+    return nice_name(entry["file"])
 
 
 class MaskEditor(QDialog):
@@ -186,7 +209,7 @@ class MaskEditor(QDialog):
     def __init__(self, parent, entry):
         super().__init__(parent)
         self.entry = entry
-        self.setWindowTitle("Edit a part - " + nice_name(entry["file"]))
+        self.setWindowTitle("Edit a part - " + _title(entry))
         self.resize(1320, 880)
         self.result_params = None
         h = QHBoxLayout(self)
@@ -250,8 +273,12 @@ class MaskEditor(QDialog):
         if not self.canvas.has_mask():
             self.go_btn.setText("Paint over a part first")
             return
-        path = os.path.join(BASE, "masks", f"mask_{int(time.time() * 1000)}.png")
-        self.canvas.save_mask(path, int(self.grow.value()), int(self.feather.value()))
+        if str(self.entry["file"]).startswith(("vault:", "mem:")):
+            from .jobs import remember_bytes
+            path = remember_bytes(self.canvas.mask_bytes(int(self.grow.value()), int(self.feather.value())))
+        else:
+            path = os.path.join(BASE, "masks", f"mask_{int(time.time() * 1000)}.png")
+            self.canvas.save_mask(path, int(self.grow.value()), int(self.feather.value()))
         p = dict(self.entry.get("params") or {})
         p.update(op="inpaint", source_image=self.entry["file"], mask_image=path, prompt=self.prompt.toPlainText(),
                  inpaint_strength=float(self.strength.value()), count=int(self.count.value()), seed=-1,
@@ -277,7 +304,7 @@ class UpscaleDialog(QDialog):
         v.setContentsMargins(22, 20, 22, 18)
         v.setSpacing(12)
         v.addWidget(label("Upscale", "H2"))
-        v.addWidget(label(nice_name(entry["file"]) + f"  ·  {self.w} × {self.h}", "Faint"))
+        v.addWidget(label(_title(entry) + f"  ·  {self.w} × {self.h}", "Faint"))
         self.mode = Segmented([("detail", "Detailed", "Enlarges, then redraws fine detail with the same model, prompt and "
                                                       "seed - sharper, adds detail"),
                                ("clean", "Clean", "Only enlarges with an upscale model - fast, changes nothing")],

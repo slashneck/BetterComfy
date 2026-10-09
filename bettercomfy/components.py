@@ -558,6 +558,7 @@ class UserPresets(QWidget):
 class GenerateBar(QWidget):
     """Sticky at the bottom of the settings: how many, Generate, and what it will be / how long it takes."""
     generate = Signal(int)
+    private_changed = Signal(bool)
 
     def __init__(self, noun="image", more=None):
         super().__init__()
@@ -586,6 +587,16 @@ class GenerateBar(QWidget):
         h.setSpacing(8)
         h.addWidget(self.count)
         h.addWidget(self.btn, 1)
+        self.lock = QPushButton()
+        self.lock.setObjectName("Icon")
+        self.lock.setCheckable(True)
+        self.lock.setFixedSize(42, 42)
+        self.lock.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lock.setToolTip("Private: straight into the encrypted vault - nothing of it is saved unencrypted, not even "
+                             "in ComfyUI's folders")
+        self.lock.toggled.connect(self._private)
+        h.addWidget(self.lock)
+        self._private(False, emit=False)
         if more:
             mb = QPushButton()
             mb.setObjectName("Icon")
@@ -605,13 +616,27 @@ class GenerateBar(QWidget):
         self.info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(self.info)
 
+    def _private(self, on, emit=True):
+        acc = T.accent().name()
+        self.lock.setIcon(icons.icon("lock" if on else "unlock", acc if on else "#A1A1AA", 18))
+        self.lock.setStyleSheet(f"QPushButton#Icon {{ border: 1px solid {acc if on else T.BORDER_HI}; border-radius: 11px;"
+                                f" background: {T.rgba(T.accent(), 40) if on else 'transparent'}; }}"
+                                f"QPushButton#Icon:hover {{ background: {T.SURFACE3}; }}")
+        self.btn.setText("  Generate privately" if on else "  Generate")
+        if emit:
+            self.private_changed.emit(on)
+
+    def set_private(self, on):
+        quiet(self.lock, self.lock.setChecked, bool(on))
+        self._private(bool(on), emit=False)
+
     def refresh_style(self):
         self.btn.setIcon(icons.icon("sparkle", T.on_accent().name(), 18))
         self.setStyleSheet(f"#GenBar {{ background: {T.PANEL}; border-top: 1px solid {T.BORDER}; }}")
 
     def flash(self):
         """A short 'added' pulse on the button."""
-        old = self.btn.text()
+        old = "  Generate privately" if self.lock.isChecked() else "  Generate"
         self.btn.setText("  Added to the queue")
         self.btn.setIcon(icons.icon("check", T.on_accent().name(), 18))
         QTimer.singleShot(900, lambda: (self.btn.setText(old), self.btn.setIcon(icons.icon("sparkle", T.on_accent().name(), 18))))
@@ -622,10 +647,16 @@ class GenerateBar(QWidget):
 class _Loader(QObject):
     done = Signal(str, object, float)
 
-    def load(self, key, path):
+    def load(self, key, path, entry=None):
+        """Frames of a video file - or, with a vault entry, of its decrypted bytes (in memory only)."""
         def work():
             try:
-                frames, fps = media.read_video(path, max_h=1080)
+                if entry is not None:
+                    from .vault import vault
+                    frames, fps = media.read_video_bytes(vault.read(entry), entry.get("w"), entry.get("h"), max_h=1080,
+                                                         fps=entry.get("fps") or 16)
+                else:
+                    frames, fps = media.read_video(path, max_h=1080)
                 qs = [QImage(f.data, f.shape[1], f.shape[0], f.strides[0], QImage.Format.Format_RGB888).copy()
                       for f in frames]
                 self.done.emit(key, qs, fps)
@@ -729,6 +760,7 @@ class ResultPane(QWidget):
         e = self.history.get(eid)
         if e is None:
             return
+        self.private = None
         self.cur = e
         self.title.setText(nice_name(e["file"]))
         bits = [f"{e.get('w')} × {e.get('h')}"]
@@ -750,6 +782,11 @@ class ResultPane(QWidget):
             self.player.show_image(e["file"], "", fade)
 
     def _loaded(self, key, frames, fps):
+        if key.startswith("private:"):
+            p = getattr(self, "private", None)
+            if p and key == "private:" + p["id"] and frames and self.live_job is None:
+                self.player.play(frames, fps, "In the vault")
+            return
         if not self.cur or self.cur["id"] != key or self.live_job is not None:
             return
         if not frames:
@@ -789,7 +826,40 @@ class ResultPane(QWidget):
     def live_end(self):
         self.live_job = None
         self.player.set_progress(None)
+        if getattr(self, "private", None):
+            return                          # a private result is on show: it stays
         if self.cur:
             self._display(self.cur, fade=True)
         else:
             self.player.message(*self.empty)
+
+    # ---- private results (from the vault, only in memory)
+    def show_private(self, entry):
+        from .vault import vault
+        if not vault.is_open() or entry.get("parked"):
+            self.player.message("Saved into the vault", "Unlock the vault to see it.")
+            return
+        self.private = entry
+        self.title.setText("Private result")
+        self.meta.setText(f"{entry.get('w')} × {entry.get('h')}  ·  seed {entry.get('seed')}  ·  in the vault, "
+                          "decrypted only in memory")
+        if entry["kind"] == "video":
+            self.loader.load("private:" + entry["id"], None, entry)
+            self.player.message("Loading…")
+        else:
+            img = QImage()
+            img.loadFromData(vault.read(entry))
+            self.player.show_image(img, "In the vault")
+        for b in self.btns.values():
+            b.setEnabled(False)
+
+    def forget_private(self):
+        """The vault was locked: nothing decrypted stays on screen."""
+        if getattr(self, "private", None) is None:
+            return
+        self.private = None
+        self.player.message(*self.empty)
+        self.title.setText("")
+        self.meta.setText("")
+        if self.cur and self.live_job is None:
+            self.show_entry(self.cur["id"], fade=False)

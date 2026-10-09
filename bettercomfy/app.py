@@ -22,6 +22,7 @@ from .link import Link
 from .loras_page import LorasPage
 from .queue_page import QueuePage
 from .settings_page import SettingsPage
+from .vault import vault
 from .video_page import VideoPage
 from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, label
 
@@ -128,6 +129,8 @@ class TopBar(QWidget):
 
 class Window(QMainWindow):
     _joined = Signal(dict)
+    _shredded = Signal(int, int)
+    _moved = Signal(list, int)
 
     def __init__(self):
         super().__init__()
@@ -174,6 +177,7 @@ class Window(QMainWindow):
         self.toasts = Toasts(root)
         from .viewer import Viewer
         self.viewer = Viewer(root)
+        self.viewer.app = self
         self.link.status.connect(self._status)
         self.queue.changed.connect(self._queue)
         self.queue.job_changed.connect(lambda _j: self._queue())
@@ -181,6 +185,10 @@ class Window(QMainWindow):
         self.queue.output.connect(self._output)
         self.queue.done.connect(self._job_done)
         self._joined.connect(self._join_done)
+        self._shredded.connect(self._shred_done)
+        self._moved.connect(self._moved_done)
+        self._vt = QTimer(self, interval=15000, timeout=self._vault_tick)
+        self._vt.start()
         self._views = []
         for i, (k, _t, _i) in enumerate(PAGES + BOTTOM):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda k=k: self.go(k))
@@ -317,7 +325,9 @@ class Window(QMainWindow):
             self.pause_act.setText("Resume queue" if q.paused else "Pause queue")
 
     def _output(self, jid, e):
-        pass
+        if e.get("vault"):
+            self.pages["image" if e.get("kind") == "image" else "video"].pane.show_private(e)
+            self.pages["gallery"].vault_changed()
 
     def _queue_done(self, made):
         if not made:
@@ -387,7 +397,215 @@ class Window(QMainWindow):
     def view(self, entries, idx=0, on_move=None):
         self.viewer.open(entries, idx, on_move)
 
+    # ================================================================ the vault
+    def ensure_vault(self, why=""):
+        from . import vault_ui
+        was = vault.is_open()
+        ok = vault_ui.ensure_open(self, why)
+        if ok and not was:
+            self._vault_opened()
+        return ok
+
+    def _vault_opened(self):
+        self._capture_guard()
+        self.pages["gallery"].vault_changed()
+        self.toast("Vault unlocked.", "ok")
+
+    def lock_vault(self, quiet=False):
+        if not vault.is_open():
+            return
+        vault.lock()
+        if any(e.get("vault") for e in self.viewer.entries):
+            self.viewer.forget()
+        for pg in ("image", "video"):
+            self.pages[pg].pane.forget_private()
+        for drop in (self.pages["image"].init, self.pages["video"].start, self.pages["video"].end):
+            if str(drop.path or "").startswith(("vault:", "mem:")):
+                drop.clear()                # no decrypted picture stays on screen
+        self.pages["gallery"].vault_changed()
+        self._capture_guard()
+        if not quiet:
+            self.toast("Vault locked.", "info")
+
+    def _capture_guard(self):
+        """While the vault is open the window is left out of screen captures and recordings (Settings, Vault)."""
+        try:
+            import ctypes
+            on = vault.is_open() and cfg.get("vault_hide_capture", True)
+            ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x11 if on else 0)
+        except Exception:
+            pass
+
+    def _vault_tick(self):
+        if not vault.is_open():
+            return
+        mins = int(cfg.get("vault_autolock", 10) or 0)
+        if mins > 0 and system.idle_seconds() >= mins * 60:
+            self.lock_vault()
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        if e.type() == QEvent.Type.WindowStateChange and self.isMinimized() and cfg.get("vault_lock_minimized", True):
+            self.lock_vault(quiet=True)
+
+    def move_to_vault(self, entries):
+        """Encrypts pictures / videos into the vault, then shreds the originals, their thumbnails and their lines in
+        the gallery file (a Recycle Bin copy would defeat the point)."""
+        entries = [e for e in entries if e and not e.get("vault") and os.path.isfile(e.get("file", ""))]
+        if not entries or not self.ensure_vault("Unlock the vault to move pictures into it."):
+            return
+        n = len(entries)
+        self.toast(f"Moving {n} into the vault…", "info")
+        mode = cfg.get("delete_mode") if cfg.get("delete_mode") in ("shred", "eraser") else "shred"
+
+        def work():
+            from . import shred
+            done, plain = [], []
+            for e in entries:
+                try:
+                    thumb = None
+                    if e.get("thumb") and os.path.isfile(e["thumb"]):
+                        with open(e["thumb"], "rb") as fh:
+                            thumb = fh.read()
+                    meta = {k: e[k] for k in ("kind", "w", "h", "seed", "prompt", "final_prompt", "negative", "model",
+                                              "params", "preset", "loras", "fps", "frames", "seconds", "loop",
+                                              "created", "took", "op", "fav") if k in e}
+                    meta.update(name=os.path.splitext(os.path.basename(e["file"]))[0],
+                                fmt=os.path.splitext(e["file"])[1].lstrip(".").lower() or "png")
+                    vault.add_file(e["file"], meta, thumb)
+                    done.append(e)
+                    plain += [e["file"], e.get("thumb"), e["file"] + ".json"]
+                except Exception:
+                    pass
+            shred.delete([p for p in plain if p and os.path.exists(p)], mode)
+            self._moved.emit([e["id"] for e in done], n - len(done))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _moved_done(self, ids, failed):
+        self.history.remove_many(ids, purge=True)
+        self.pages["gallery"].vault_changed()
+        msg = f"{len(ids)} moved into the vault, the originals shredded."
+        if failed:
+            msg += f" {failed} couldn't be moved."
+        self.toast(msg, "ok" if not failed else "warn")
+
+    def take_out_of_vault(self, entries):
+        """Decrypts pictures / videos back into your folders (as normal gallery items) and takes them out."""
+        entries = [e for e in entries if e and e.get("vault")]
+        if not entries or not vault.is_open():
+            return
+        if QMessageBox.question(self, "Vault", f"Decrypt {'this' if len(entries) == 1 else f'these {len(entries)}'} "
+                                               "back into your normal folders? They are then no longer protected.") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        from .jobs import _out_dir
+        moved = 0
+        for e in entries:
+            try:
+                ext = e.get("fmt") or ("png" if e["kind"] == "image" else "mp4")
+                path = media.unique(os.path.join(_out_dir(e["kind"]), f"{e.get('name') or 'BC_' + e['id']}.{ext}"))
+                vault.export(e, path)
+                tb = vault.read(e, "thumb_blob")
+                thumb = None
+                if tb:
+                    thumb = os.path.join(BASE, "thumbs", os.path.basename(path).rsplit(".", 1)[0] + f"_{e['id']}.jpg")
+                    os.makedirs(os.path.dirname(thumb), exist_ok=True)
+                    with open(thumb, "wb") as fh:
+                        fh.write(tb)
+                h = {k: v for k, v in e.items() if k not in ("id", "vault", "blob", "thumb_blob", "size", "added",
+                                                                "name", "fmt")}
+                if isinstance(h.get("params"), dict):
+                    h["params"] = {k: v for k, v in h["params"].items() if k != "private"}
+                h.update(file=path, thumb=thumb)
+                self.history.add(h)
+                vault.remove([e["id"]])
+                moved += 1
+            except Exception as ex:
+                QMessageBox.warning(self, "Vault", f"Couldn't take it out:\n{ex}")
+        self.pages["gallery"].vault_changed()
+        self.toast(f"{moved} taken out of the vault.", "ok")
+
+    def delete_vault(self, entries):
+        entries = [e for e in entries if e and e.get("vault")]
+        if not entries or not vault.is_open():
+            return
+        n = len(entries)
+        if QMessageBox.question(self, "Vault", f"Delete {'this' if n == 1 else f'these {n}'} from the vault for "
+                                               "good?") != QMessageBox.StandardButton.Yes:
+            return
+        vault.remove([e["id"] for e in entries])
+        if self.viewer.isVisible():
+            self.viewer.drop([e["id"] for e in entries])
+        self.pages["gallery"].vault_changed()
+        self.toast(f"{n} deleted from the vault.", "ok")
+
+    def _vault_action(self, key, e):
+        """Things to do with something in the vault - everything made from it stays private too."""
+        from . import jobs
+        ref = "vault:" + e["id"]
+        if key == "view":
+            items = vault.recent()
+            ids = [x["id"] for x in items]
+            self.view(items, ids.index(e["id"]) if e["id"] in ids else 0)
+        elif key in ("upscale", "inpaint"):
+            p = dict(e.get("params") or {})
+            if not p.get("ckpt"):
+                p.update({k: v for k, v in self.pages["image"].p.items() if k in ("ckpt", "model_src", "family",
+                                                                                   "te1", "te2", "evae")})
+            e2 = dict(e, params=p, file=ref)
+            if key == "upscale":
+                from .tools import UpscaleDialog
+                d = UpscaleDialog(self, e2, bool(self.link.lists.get("upscale")))
+            else:
+                from .tools import MaskEditor
+                d = MaskEditor(self, e2)
+            if d.exec() and d.result_params:
+                d.result_params["private"] = True
+                self._queue_image(d.result_params, "Private picture")
+                self.toast("Queued - the result goes into the vault.", "ok")
+        elif key == "animate":
+            self.pages["video"].set_start(ref)
+            self.go("video")
+        elif key == "reuse":
+            pg = self.pages["image" if e["kind"] == "image" else "video"]
+            pg.use_settings(dict(e.get("params") or {}, private=True))
+            self.go("image" if e["kind"] == "image" else "video")
+        elif key == "copy":
+            data = vault.read(e)
+            img = QImage()
+            img.loadFromData(data)
+            QApplication.clipboard().setImage(img)
+            self.toast("Picture copied (it is on the clipboard now, unencrypted).", "info")
+        elif key == "copyprompt":
+            QApplication.clipboard().setText(e.get("final_prompt") or e.get("prompt") or "")
+            self.toast("Prompt copied.", "ok")
+        elif key == "take_out":
+            self.take_out_of_vault([e])
+        elif key == "delete":
+            self.delete_vault([e])
+        elif key == "extend":
+            try:
+                data = vault.read(e)
+                frames, _fps = media.read_video_bytes(data, e.get("w"), e.get("h"), max_h=100000)
+                buf = media.png_bytes_of(frames[-1])
+            except Exception as ex:
+                QMessageBox.warning(self, "Extend", f"Could not read the last frame:\n{ex}")
+                return
+            key_ = jobs.remember_bytes(buf)
+            params = dict(e.get("params") or {})
+            params.update(start_image=key_, loop="free", seed=-1, join_with=ref, join=True,
+                          join_name=e.get("name") or "the clip", private=True)
+            self.pages["video"].load(params)
+            self.go("video")
+            self.toast("The last frame is the new start - the result goes into the vault.", "ok")
+
     def result_action(self, key, e, page=None):
+        if e and e.get("vault"):
+            self._vault_action(key, e)
+            return
+        if key == "move_vault":
+            self.move_to_vault([e])
+            return
         if key == "view":
             items = self.history.recent(e.get("kind"), 2000)
             ids = [x["id"] for x in items]
@@ -519,26 +737,65 @@ class Window(QMainWindow):
         if pics:
             self.pages["video"].batch(pics)
 
-    def delete_entries(self, entries):
+    def delete_entries(self, entries, ask=True):
+        """Pictures and videos away for good: to the Recycle Bin, or shredded (Settings, Deleting). Their thumbnails and
+        settings files go the same way; with shredding their gallery lines are rewritten out of the gallery file too."""
+        entries = [e for e in entries if e]
         if not entries:
             return
-        if cfg.get("confirm_delete"):
-            n = len(entries)
-            if QMessageBox.question(self, "Delete", f"Move {'this' if n == 1 else f'these {n}'} to the recycle bin?") \
-                    != QMessageBox.StandardButton.Yes:
+        from . import shred
+        mode = cfg.get("delete_mode", "recycle")
+        if mode == "eraser" and not shred.eraser_path():
+            mode = "shred"
+        n = len(entries)
+        what = "this" if n == 1 else f"these {n}"
+        if ask and cfg.get("confirm_delete"):
+            q = {"recycle": f"Move {what} to the Recycle Bin?",
+                 "shred": f"Shred {what}? They are overwritten and can't be brought back.",
+                 "eraser": f"Erase {what} with Eraser? They can't be brought back."}[mode]
+            if QMessageBox.question(self, "Delete", q) != QMessageBox.StandardButton.Yes:
                 return
+        files, caches = [], []
         for e in entries:
-            files = [e.get("file"), e.get("thumb"), (e.get("file") or "") + ".json"]
-            system.recycle([f for f in files[:1] if f])
-            for f in files[1:]:
+            if e.get("file"):
+                files.append(e["file"])
+                if os.path.isfile(e["file"] + ".json"):
+                    files.append(e["file"] + ".json")
+            if e.get("thumb"):
+                caches.append(e["thumb"])
+        self.history.remove_many([e["id"] for e in entries], purge=mode != "recycle")
+        if self.viewer.isVisible():
+            self.viewer.drop([e["id"] for e in entries])
+        if mode == "recycle":
+            shred.delete(files, "recycle")
+            for c in caches:
                 try:
-                    if f and os.path.isfile(f) and f.startswith(BASE):
-                        os.remove(f)
-                    elif f and f.endswith(".json") and os.path.isfile(f):
-                        system.recycle([f])
+                    os.remove(c)
                 except OSError:
                     pass
-            self.history.remove(e["id"])
+            return
+        self.toast(f"{'Shredding' if mode == 'shred' else 'Erasing'} {n} item{'s' if n != 1 else ''}…", "info")
+
+        def work():
+            left = shred.delete(files + caches, mode)
+            self._shredded.emit(n, len([f for f in left if f in files]))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _shred_done(self, n, failed):
+        if failed:
+            self.toast(f"{failed} file{'s' if failed != 1 else ''} couldn't be deleted (in use?).", "warn")
+        else:
+            self.toast(f"{n} item{'s' if n != 1 else ''} deleted for good.", "ok")
+
+    def toggle_flag(self, entries, key):
+        """Favourite ('fav') or marked for deletion ('marked') on / off for these (on when any of them is off)."""
+        entries = [e for e in entries if e]
+        if not entries:
+            return
+        on = not all(e.get(key) for e in entries)
+        for e in entries:
+            self.history.update(e["id"], **{key: on})
+        return on
 
     def show_entry(self, eid):
         e = self.history.get(eid)
@@ -548,6 +805,17 @@ class Window(QMainWindow):
         g = self.pages["gallery"]
         g.fill()
         g.show(eid)
+
+    def show_vault_entry(self, vid):
+        if not self.ensure_vault() or not vault.get(vid):
+            return
+        self.go("gallery")
+        g = self.pages["gallery"]
+        g.place = "vault"
+        g._fill_nav()
+        g.fill()
+        g._follow({"id": vid})
+        g.show(vid)
 
     def add_lora(self, where, name):
         pg = self.pages["image" if where == "image" else "video"]
@@ -631,6 +899,7 @@ class Window(QMainWindow):
         e.accept()
 
     def _shutdown_cleanup(self):
+        vault.lock()
         self._save_window()
         self.pages["image"]._save()
         cfg.set("video_state", dict(self.pages["video"].p))

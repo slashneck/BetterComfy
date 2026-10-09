@@ -38,7 +38,7 @@ def _thumb(path, size=64):
 
 ITEM = {"queued": ("Waiting", T.TEXT3), "running": ("Making it now…", None), "stopping": ("Stopping…", T.WARN),
         "done": ("Done", T.GOOD), "canceled": ("Stopped", T.TEXT3), "removed": ("Taken out", T.TEXT3),
-        "deleted": ("Deleted", T.TEXT3), "failed": ("Failed", T.BAD)}
+        "deleted": ("Deleted", T.TEXT3), "failed": ("Failed", T.BAD), "vault": ("In the vault", None)}
 
 
 class ItemRow(QWidget):
@@ -54,16 +54,20 @@ class ItemRow(QWidget):
         h.setContentsMargins(10, 6, 8, 6)
         h.setSpacing(10)
         st = it.get("status", "queued")
-        ents = [page.app.history.get(e) for e in it.get("entries") or []]
+        refs = it.get("entries") or []
+        ents = [page.app.history.get(e) for e in refs if not str(e).startswith("vault:")]
         ents = [e for e in ents if e]
-        if st == "done" and not ents and it.get("entries"):
+        private = [r[6:] for r in refs if str(r).startswith("vault:")]
+        if st == "done" and private and not ents:
+            st = "vault"
+        elif st == "done" and not ents and refs:
             st = "deleted"
         th = QLabel()
         th.setFixedSize(36, 36)
         th.setPixmap(_thumb(ents[-1].get("thumb") if ents else None, 36))
         h.addWidget(th)
         name, col = ITEM.get(st, (st, T.TEXT3))
-        if st == "running" and j["status"] == "running":
+        if (st == "running" and j["status"] == "running") or st == "vault":
             col = T.accent().name()
         lb = label(it.get("label") or "", None)
         lb.setStyleSheet(f"color: {T.TEXT if st in ('running', 'done') else T.TEXT2};")
@@ -76,6 +80,9 @@ class ItemRow(QWidget):
             h.addWidget(icon_button("eye", lambda: page.app.show_entry(ents[-1]["id"]), "Show it", size=14))
             h.addWidget(icon_button("trash", lambda: (page.app.delete_entries(ents), page.rebuild()),
                                     "Delete it (recycle bin)", size=14))
+        elif st == "vault":
+            h.addWidget(icon_button("lock", lambda: page.app.show_vault_entry(private[-1]), "Show it (in the vault)",
+                                    size=14))
         elif st == "running" and j["status"] == "running":
             h.addWidget(icon_button("stop", lambda: q.stop_item(jid, i), "Stop this one - the rest go on", size=14,
                                     color="#FF8A8A"))

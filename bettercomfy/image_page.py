@@ -44,6 +44,7 @@ class ImagePage(QWidget):
         self.bar = GenerateBar("image", [("Compare settings…", "gallery", self.compare),
                                          ("Start pictures from a folder…", "folder", self.batch_folder)])
         self.bar.generate.connect(self.generate)
+        self.bar.private_changed.connect(lambda on: self._set("private", on))
         sv.addWidget(self.bar)
 
         # my presets
@@ -271,6 +272,7 @@ class ImagePage(QWidget):
         if p.get("init_image"):
             self.init_box.set_open(True)
         self.denoise.set(float(p.get("denoise", 0.6)))
+        self.bar.set_private(p.get("private", False))
         self._loading = False
         self._update()
 
@@ -453,12 +455,17 @@ class ImagePage(QWidget):
             self.toast.emit("Write a prompt first - what should the picture show?", "warn")
             self.prompt.edit.setFocus()
             return
-        remember_prompt(p.get("prompt"))
+        from .jobs import is_private
+        private = is_private(p)
+        if private and not self.app.ensure_vault("Unlock the vault: private pictures go straight into it."):
+            return
+        if not private:
+            remember_prompt(p.get("prompt"))
         kind = self._kind()
         pl = W.image_plan(p, kind)
-        title = (p.get("prompt") or "Picture").strip().replace("\n", " ")[:70]
-        self.queue.add("image", p, title, thumb=p.get("init_image") or None, units=W.work_units("image", pl, count),
-                       ckpt_kind=kind)
+        title = "Private picture" if private else (p.get("prompt") or "Picture").strip().replace("\n", " ")[:70]
+        self.queue.add("image", p, title, thumb=None if private else (p.get("init_image") or None),
+                       units=W.work_units("image", pl, count), ckpt_kind=kind)
         self.bar.flash()
         if not self.link.running() and cfg.get("auto_start"):
             self.toast.emit("Starting ComfyUI - the first picture takes a little longer.", "info")

@@ -55,6 +55,13 @@ class Viewer(QWidget):
         self.timer.stop()
         self._fade_to(0.0)
 
+    def forget(self):
+        """The vault locked: decrypted pixels go at once, no fade."""
+        self.timer.stop()
+        self.frames, self.entries, self.pm = [], [], QPixmap()
+        self._op = 0.0
+        self.hide()
+
     def _fade_to(self, v):
         if not anims_on():
             self._op = v
@@ -83,7 +90,17 @@ class Viewer(QWidget):
         self.frames = []
         if e is None:
             return
-        if e.get("kind") == "video":
+        if e.get("vault"):
+            # decrypted into memory only
+            from .vault import vault
+            self.pm = QPixmap()
+            try:
+                self.pm.loadFromData(vault.read(e, "thumb_blob" if e.get("kind") == "video" else "blob") or b"")
+            except Exception:
+                pass
+            if e.get("kind") == "video":
+                self.loader.load(e["id"], None, e)
+        elif e.get("kind") == "video":
             self.pm = QPixmap(e.get("thumb") or "")
             self.loader.load(e["id"], e["file"])
         else:
@@ -105,6 +122,31 @@ class Viewer(QWidget):
             self.fi = (self.fi + 1) % len(self.frames)
             self.pm = self.frames[self.fi]
             self.update()
+
+    def drop(self, ids):
+        """Entries deleted while the viewer is open: shown no more (on to the next one, or closed)."""
+        ids = set(ids)
+        cur = self.cur()
+        self.entries = [e for e in self.entries if e["id"] not in ids]
+        if not self.entries:
+            self.close_view()
+            return
+        if cur and cur["id"] in ids:
+            self.idx = min(self.idx, len(self.entries) - 1)
+            self._load()
+        else:
+            self.idx = self.entries.index(cur) if cur in self.entries else 0
+        self.update()
+
+    def _flag(self, key):
+        e = self.cur()
+        app = getattr(self, "app", None)
+        if e is None or app is None or e.get("vault"):
+            return
+        on = app.toggle_flag([e], key)
+        self.update()
+        if key == "marked" and on:
+            QTimer.singleShot(180, lambda: self.step(1))            # culling: on to the next one
 
     def step(self, d):
         if len(self.entries) > 1:
@@ -242,6 +284,12 @@ class Viewer(QWidget):
         k = e.key()
         if k == Qt.Key.Key_Escape:
             self.close_view()
+        elif k == Qt.Key.Key_F:
+            self._flag("fav")
+        elif k == Qt.Key.Key_X:
+            self._flag("marked")
+        elif k == Qt.Key.Key_Delete and getattr(self, "app", None) and self.cur():
+            self.app.delete_entries([self.cur()])
         elif k in (Qt.Key.Key_Left, Qt.Key.Key_A):
             self.step(-1)
         elif k in (Qt.Key.Key_Right, Qt.Key.Key_D):
@@ -289,7 +337,7 @@ class Viewer(QWidget):
         p.setFont(f)
         p.setPen(QColor(T.TEXT))
         if e:
-            p.drawText(QRectF(24, 18, self.width() - 140, 24), Qt.AlignmentFlag.AlignVCenter, nice_name(e["file"]))
+            p.drawText(QRectF(24, 18, self.width() - 140, 24), Qt.AlignmentFlag.AlignVCenter, (e.get("name") or "Private") if e.get("vault") else nice_name(e["file"]))
             f.setPixelSize(12)
             f.setWeight(QFont.Weight.Normal)
             p.setFont(f)
@@ -298,11 +346,33 @@ class Viewer(QWidget):
             info = f"{self.idx + 1} / {len(self.entries)}    {e.get('w')} × {e.get('h')}    {zoom}"
             fm = QFontMetrics(f)
             p.drawText(QPointF(self.width() - 80 - fm.horizontalAdvance(info), 35), info)
-            hint = "Click: zoom in / fit   ·   Wheel: zoom   ·   Drag: move   ·   ← →: before / after   ·   Esc: close"
+            hint = ("Click: zoom   ·   Wheel: zoom   ·   ← →: before / after   ·   F: favourite   ·   X: mark for "
+                    "deletion   ·   Esc: close")
             if self.frames:
                 hint += "   ·   Space: pause"
             p.setPen(QColor(T.TEXT3))
             p.drawText(QRectF(0, self.height() - 34, self.width(), 20), Qt.AlignmentFlag.AlignCenter, hint)
+        # favourite / marked
+        if e:
+            x = 24
+            f2 = QFont(self.font())
+            f2.setPixelSize(12)
+            f2.setWeight(QFont.Weight.DemiBold)
+            p.setFont(f2)
+            for on, text, col in ((e.get("fav"), "★  Favourite", QColor("#F5B041")),
+                                  (e.get("marked"), "Marked for deletion", QColor(T.BAD))):
+                if not on:
+                    continue
+                w = QFontMetrics(f2).horizontalAdvance(text) + 22
+                r = QRectF(x, 48, w, 24)
+                p.setPen(Qt.PenStyle.NoPen)
+                bg = QColor(col)
+                bg.setAlpha(46)
+                p.setBrush(bg)
+                p.drawRoundedRect(r, 8, 8)
+                p.setPen(col)
+                p.drawText(r, Qt.AlignmentFlag.AlignCenter, text)
+                x += w + 8
         # close + arrows
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(255, 255, 255, 40 if self.hover == "close" else 18))

@@ -1,6 +1,7 @@
 """The generation queue: pictures and videos one after the other, live progress and previews, learned time estimates,
 kept across restarts. The work itself runs in a background thread; everything shown runs in the main thread."""
 import copy
+import io
 import json
 import os
 import threading
@@ -75,16 +76,122 @@ class _Ctx:
     def item(self, i, status):
         self.w.sig_item.emit(self.w.job["id"], i, status)
 
-    def run(self, i, prompt, labels, on_progress, on_preview, weights):
+    def run(self, i, prompt, labels, on_progress, on_preview, weights, capture=None):
         """client.run for item i - stoppable on its own. Returns None when only this item was stopped."""
         try:
             return self.client.run(prompt, labels, on_progress, on_preview,
-                                   lambda: self.cancelled() or self.stopped(i), weights)
+                                   lambda: self.cancelled() or self.stopped(i), weights, capture)
         except (InterruptedError, comfy.ComfyError):
             if self.stopped(i) and not self.cancelled():
                 self.item(i, "canceled")
                 return None
             raise
+
+
+REFS = ("init_image", "source_image", "mask_image", "start_image", "end_image", "join_with")
+MEM = {}                                # "mem:<id>" -> picture bytes that only live in memory (never on disk)
+
+
+def remember_bytes(data):
+    key = "mem:" + uuid.uuid4().hex[:12]
+    MEM[key] = data
+    return key
+
+
+def is_private(p):
+    """Made for the vault: asked for, or made from something that is in the vault."""
+    return bool(p.get("private")) or any(str(p.get(k) or "").startswith(("vault:", "mem:")) for k in REFS)
+
+
+def _vault_entry(ref):
+    from .vault import vault
+    if not vault.is_open():
+        raise comfy.ComfyError("The vault is locked - unlock it to use a picture from it.")
+    e = vault.get(ref[6:])
+    if e is None:
+        raise comfy.ComfyError("That picture is not in the vault any more.")
+    return e
+
+
+def ref_ok(ref):
+    if not ref:
+        return False
+    if str(ref).startswith("mem:"):
+        return ref in MEM
+    if str(ref).startswith("vault:"):
+        _vault_entry(ref)
+        return True
+    return os.path.isfile(ref)
+
+
+def ref_bytes(ref):
+    if str(ref).startswith("mem:"):
+        return MEM[ref]
+    if str(ref).startswith("vault:"):
+        from .vault import vault
+        return vault.read(_vault_entry(ref))
+    return media.png_bytes_of(ref)
+
+
+def ref_size(ref):
+    if str(ref).startswith("mem:"):
+        return media.image_size(io.BytesIO(MEM[ref]))
+    if str(ref).startswith("vault:"):
+        e = _vault_entry(ref)
+        return (e.get("w") or 1024, e.get("h") or 1024)
+    return media.image_size(ref)
+
+
+class _Trail:
+    """What a private job left in ComfyUI's folders (uploaded pictures, temp results): shredded when it ends."""
+
+    def __init__(self, ctx, private):
+        self.ctx, self.private, self.files = ctx, private, []
+
+    def upload(self, data, name):
+        c = self.ctx.client
+        ref = c.upload(data, ("p_" + uuid.uuid4().hex[:12] + ".png") if self.private else name)
+        if self.private:
+            ins = self.ctx.w.link.install()
+            if ins:
+                self.files.append(os.path.join(comfy.sub_dir(ins, "input"), *ref.split("/")))
+        return ref
+
+    def temp(self, f):
+        ins = self.ctx.w.link.install()
+        if ins and self.private:
+            self.files.append(os.path.join(comfy.sub_dir(ins, f.get("type", "temp")), *(f.get("subfolder") or "").split("/"),
+                                           f["filename"]))
+
+    def clean(self):
+        if self.files:
+            from . import shred
+            for f in self.files:
+                shred.shred_file(f)
+            self.files = []
+
+
+def _ws_output(P, c):
+    """Private results come back over the live connection instead of being saved by ComfyUI: the preview node is
+    swapped for SaveImageWebsocket (part of ComfyUI). Returns its node id, or None when this ComfyUI lacks it."""
+    if not c.has("SaveImageWebsocket"):
+        return None
+    for nid, n in P.items():
+        if n["class_type"] == "PreviewImage":
+            n["class_type"] = "SaveImageWebsocket"
+            n["inputs"] = {"images": n["inputs"]["images"]}
+            return nid
+    return None
+
+
+def _to_vault(ctx, data, meta, thumb):
+    """Into the vault - or, when it was locked meanwhile, held in memory until it is unlocked again."""
+    from .vault import VaultError, vault
+    try:
+        return vault.add(data, meta, thumb)
+    except VaultError:
+        vault.park(data, meta, thumb)
+        return dict(meta, vault=True, parked=True, id="parked")
 
 
 def _variants(p):
@@ -120,21 +227,34 @@ def run_image(ctx, job):
         have = c.choices("UNETLoader", "unet_name") if src == "unet" else c.choices("CheckpointLoaderSimple", "ckpt_name")
         if not p.get("ckpt") or p["ckpt"] not in have:
             raise comfy.ComfyError(f"The model '{p.get('ckpt') or '-'}' is not in ComfyUI - pick another one.")
+    private = is_private(p)
+    trail = _Trail(ctx, private)
+    try:
+        return _run_image(ctx, job, c, p, op, src, lists, private, trail)
+    finally:
+        trail.clean()
+
+
+def _run_image(ctx, job, c, p, op, src, lists, private, trail):
     src_size = None
     init = mask = None
     if op in ("upscale", "inpaint"):
-        if not os.path.isfile(p.get("source_image", "")):
+        if not ref_ok(p.get("source_image")):
             raise comfy.ComfyError("The picture to work on is not there any more.")
-        src_size = media.image_size(p["source_image"])
+        src_size = ref_size(p["source_image"])
         ctx.progress(0.0, "Handing the picture over")
-        init = c.upload(media.png_bytes_of(p["source_image"]), f"bc_src_{job['id']}.png")
+        init = trail.upload(ref_bytes(p["source_image"]), f"bc_src_{job['id']}.png")
         if op == "inpaint":
-            if not os.path.isfile(p.get("mask_image", "")):
+            if not ref_ok(p.get("mask_image")):
                 raise comfy.ComfyError("The mask is missing - paint where to redraw first.")
-            mask = c.upload(media.png_bytes_of(p["mask_image"]), f"bc_mask_{job['id']}.png")
+            mask = trail.upload(ref_bytes(p["mask_image"]), f"bc_mask_{job['id']}.png")
+            if private and os.path.isfile(p["mask_image"]):
+                trail.files.append(p["mask_image"])         # the mask outlines a private picture: it goes too
     elif p.get("init_image"):
+        if not ref_ok(p["init_image"]):
+            raise comfy.ComfyError("The start picture is not there any more.")
         ctx.progress(0.0, "Handing the start picture over")
-        init = c.upload(media.png_bytes_of(p["init_image"]), f"bc_init_{job['id']}.png")
+        init = trail.upload(ref_bytes(p["init_image"]), f"bc_init_{job['id']}.png")
     ups = c.choices("UpscaleModelLoader", "model_name") if c.has("UpscaleModelLoader") else []
     todo = _variants(p)
     n = len(todo)
@@ -160,15 +280,27 @@ def run_image(ctx, job):
             raise comfy.ComfyError(str(ex))
         tag = f"  ·  {vlabel or (str(i + 1) + ' of ' + str(n))}" if n > 1 else ""
         t0 = time.time()
+        cap = (_ws_output(P, c), []) if private else None
         hist = ctx.run(i, P, labels, lambda f, t, i=i: ctx.progress((i + 0.97 * f) / n, t + tag), ctx.preview,
-                       weights)
+                       weights, cap if cap and cap[0] else None)
         if hist is None:
             continue
-        files = comfy.result_images(hist)
-        if not files:
-            raise comfy.ComfyError("ComfyUI made no picture")
-        for f in files:
-            data = c.fetch(f)
+        if private:
+            c.forget((hist.get("prompt") or [None, None])[1])
+            datas = cap[1] if cap[0] else []
+            if not cap[0]:
+                for f in comfy.result_images(hist):
+                    datas.append(c.fetch(f))
+                    trail.temp(f)
+            if not datas:
+                raise comfy.ComfyError("ComfyUI made no picture")
+            files = [None] * len(datas)
+        else:
+            files = comfy.result_images(hist)
+            if not files:
+                raise comfy.ComfyError("ComfyUI made no picture")
+        for fi, f in enumerate(files):
+            data = datas[fi] if private else c.fetch(f)
             stamp = time.strftime("%H%M%S")
             suffix = {"upscale": "_up", "inpaint": "_edit"}.get(op, "")
             path = media.unique(os.path.join(_out_dir("image"), f"BC_{stamp}_{seed}{suffix}.png"))
@@ -180,6 +312,17 @@ def run_image(ctx, job):
             if cfg.get("embed_metadata"):
                 text = {"parameters": media.a1111_text(pos, neg, meta), "prompt": json.dumps(P),
                         "bettercomfy": json.dumps({"kind": "image", "params": keep, "seed": seed})}
+            if private:
+                data, size = media.png_with_text(data, text)
+                e = {"kind": "image", "name": os.path.basename(path)[:-4], "w": size[0], "h": size[1], "seed": seed,
+                     "prompt": q.get("prompt", ""), "final_prompt": pos, "negative": neg, "model": q.get("ckpt"),
+                     "params": dict(keep, seed=seed, op="generate", private=True), "took": round(time.time() - t0, 1),
+                     "preset": q.get("preset"), "loras": meta["loras"], "op": op, "fmt": "png"}
+                if p.get("variants"):
+                    e.update(group=job["id"], label=vlabel)
+                e = _to_vault(ctx, data, e, media.thumbnail_bytes(data))
+                ctx.output(dict(e, _item=i, vault=True))
+                continue
             size = media.save_png(data, path, text)
             thumb = media.thumbnail(path, os.path.join(BASE, "thumbs", os.path.basename(path)[:-4] + f"_{job['id']}.jpg"))
             e = {"kind": "image", "file": path, "thumb": thumb, "w": size[0], "h": size[1], "seed": seed,
@@ -222,17 +365,26 @@ def run_video(ctx, job):
         p["models"] = "one"
     if not (p.get("unet") or p.get("unet_high")) or not p.get("clip") or not p.get("vae"):
         raise comfy.ComfyError("ComfyUI has no WAN model, text encoder or VAE yet - see Settings → ComfyUI → Check.")
+    private = is_private(p)
+    trail = _Trail(ctx, private)
+    try:
+        return _run_video(ctx, job, c, p, mode, private, trail)
+    finally:
+        trail.clean()
+
+
+def _run_video(ctx, job, c, p, mode, private, trail):
     aspect = 2 / 3
     start = end = None
     if mode == "i2v":
-        if not p.get("start_image") or not os.path.isfile(p["start_image"]):
+        if not ref_ok(p.get("start_image")):
             raise comfy.ComfyError("The start picture is not there any more.")
-        sz = media.image_size(p["start_image"])
+        sz = ref_size(p["start_image"])
         aspect = sz[0] / sz[1] if sz else aspect
         ctx.progress(0.0, "Handing the picture over")
-        start = c.upload(media.png_bytes_of(p["start_image"]), f"bc_{job['id']}.png")
-        if p.get("loop") == "pair" and p.get("end_image") and os.path.isfile(p["end_image"]):
-            end = c.upload(media.png_bytes_of(p["end_image"]), f"bc_{job['id']}_end.png")
+        start = trail.upload(ref_bytes(p["start_image"]), f"bc_{job['id']}.png")
+        if p.get("loop") == "pair" and p.get("end_image") and ref_ok(p["end_image"]):
+            end = trail.upload(ref_bytes(p["end_image"]), f"bc_{job['id']}_end.png")
     n = max(1, int(p.get("count", 1)))
     base_seed = int(p.get("seed", -1))
     units = 0
@@ -251,30 +403,59 @@ def run_video(ctx, job):
         P, labels, weights, text = workflows.build_video(p, pl, start, end, c, seed)
         tag = f"  ·  {v + 1} of {n}" if n > 1 else ""
         t0 = time.time()
+        cap = (_ws_output(P, c), []) if private else None
         hist = ctx.run(v, P, labels, lambda f, t, v=v: ctx.progress((v + 0.93 * f) / n, t + tag), ctx.preview,
-                       weights)
+                       weights, cap if cap and cap[0] else None)
         if hist is None:
             continue
-        files = comfy.result_images(hist)
-        if not files:
-            raise comfy.ComfyError("ComfyUI made no frames")
-        frames = []
-        for i, f in enumerate(files):
-            if ctx.cancelled():
-                raise InterruptedError("stopped")
-            frames.append(media.decode(c.fetch(f)))
-            if i % 8 == 0:
-                ctx.progress((v + 0.93 + 0.04 * i / len(files)) / n, "Taking the frames back" + tag)
+        if private:
+            c.forget((hist.get("prompt") or [None, None])[1])
+        if private and cap[0]:
+            frames = [media.decode(b) for b in cap[1]]
+            if not frames:
+                raise comfy.ComfyError("ComfyUI made no frames")
+        else:
+            files = comfy.result_images(hist)
+            if not files:
+                raise comfy.ComfyError("ComfyUI made no frames")
+            frames = []
+            for i, f in enumerate(files):
+                if ctx.cancelled():
+                    raise InterruptedError("stopped")
+                frames.append(media.decode(c.fetch(f)))
+                trail.temp(f)
+                if i % 8 == 0:
+                    ctx.progress((v + 0.93 + 0.04 * i / len(files)) / n, "Taking the frames back" + tag)
         frames = media.finish_loop(frames, pl["loop"], int(p.get("seam", 0)), pl["interp"], bool(p.get("steady", True)))
         fps = pl["fps"]
         joined = None
-        if p.get("join", True) and p.get("join_with") and os.path.isfile(p["join_with"]):
+        if p.get("join", True) and p.get("join_with") and ref_ok(p["join_with"]):
             ctx.progress((v + 0.97) / n, "Joining with the clip it continues" + tag)
-            frames, fps = media.join_clips([p["join_with"]], frames, fps)
+            if str(p["join_with"]).startswith("vault:"):
+                from .vault import vault
+                je = _vault_entry(p["join_with"])
+                head = media.read_video_bytes(vault.read(je), je.get("w"), je.get("h"), max_h=100000,
+                                              fps=je.get("fps") or 16)
+                frames, fps = media.join_clips([], frames, fps, head=head)
+            else:
+                frames, fps = media.join_clips([p["join_with"]], frames, fps)
             joined = p["join_with"]
         ctx.progress((v + 0.98) / n, "Writing the video" + tag)
         fmt = p.get("format", "mp4")
         stamp = time.strftime("%H%M%S")
+        if private:
+            data = media.encode_video_bytes(frames, fps, fmt, int(p.get("crf", 16)))
+            e = {"kind": "video", "name": f"BC_{stamp}_{seed}", "fmt": fmt, "w": frames[0].shape[1],
+                 "h": frames[0].shape[0], "seed": seed, "fps": fps, "frames": len(frames),
+                 "seconds": round(len(frames) / fps, 2), "joined": bool(joined), "prompt": p.get("prompt", ""),
+                 "final_prompt": text, "model": p.get("unet_high") or p.get("unet"),
+                 "params": dict(p, seed=seed, private=True), "took": round(time.time() - t0, 1),
+                 "preset": p.get("preset"), "loop": pl["loop"],
+                 "loras": [lo.get("file") for lo in p.get("loras") or [] if lo.get("on", True)]}
+            e = _to_vault(ctx, data, e, media.thumbnail_bytes(frames[0]))
+            ctx.output(dict(e, _item=v, vault=True))
+            ctx.item(v, "done")
+            continue
         path = media.unique(os.path.join(_out_dir("video"), f"BC_{stamp}_{seed}.{fmt}"))
         media.write_video(frames, fps, path, fmt, int(p.get("crf", 16)))
         thumb = media.thumbnail(frames[0], os.path.join(BASE, "thumbs", os.path.basename(path).rsplit(".", 1)[0] +
@@ -386,7 +567,7 @@ class Queue(QObject):
     def _save(self):
         try:
             os.makedirs(BASE, exist_ok=True)
-            keep = [j for j in self.jobs if j["status"] in ("queued", "running")]
+            keep = [j for j in self.jobs if j["status"] in ("queued", "running") and not is_private(j["params"])]
             tmp = _FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump({"jobs": keep}, fh, ensure_ascii=False)
@@ -584,8 +765,15 @@ class Queue(QObject):
 
     def _output(self, jid, entry):
         i = entry.pop("_item", None)
-        e = self.history.add(entry)
         j = self.job(jid)
+        if entry.get("vault"):
+            # into the vault: nothing of it goes into the gallery list
+            if j is not None and i is not None and 0 <= i < len(j.get("items") or []):
+                j["items"][i]["entries"].append("vault:" + entry["id"])
+            self._made += 1
+            self.output.emit(jid, entry)
+            return
+        e = self.history.add(entry)
         if j is not None:
             j["outputs"].append(e["id"])
             if i is not None and 0 <= i < len(j.get("items") or []):

@@ -787,6 +787,13 @@ class Client:
         except ComfyError:
             pass
 
+    def forget(self, pid):
+        """Takes a finished job out of ComfyUI's history (it keeps every prompt in memory until it restarts)."""
+        try:
+            self.post_json("/history", {"delete": [pid]}, 10)
+        except ComfyError:
+            pass
+
     def free(self):
         """Let ComfyUI unload its models (the graphics card is free again)."""
         try:
@@ -814,14 +821,19 @@ class Client:
         name = re.sub(r"^\s*cuda:\d+\s*", "", name).replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").strip()
         return name, float(dev.get("vram_total", 0)) / 2 ** 30, float(dev.get("vram_free", 0)) / 2 ** 30
 
-    def run(self, prompt, labels=None, on_progress=None, on_preview=None, cancel=None, weights=None):
+    def run(self, prompt, labels=None, on_progress=None, on_preview=None, cancel=None, weights=None, capture=None):
         """Queue a prompt and wait for it. on_progress(fraction, text); on_preview(jpeg/png bytes).
-        weights: {node id: share of the work}. Returns its history entry."""
+        weights: {node id: share of the work}. capture: (node id, list) - the pictures that node sends over the
+        connection (SaveImageWebsocket) are put into the list instead of being shown as previews; nothing of them is
+        written to disk. Returns its history entry."""
         ws = _WS(self.url, self.client_id)
         try:
             ws.connect()
         except Exception:
             ws = None
+            if capture:
+                raise ComfyError("The live connection to ComfyUI couldn't be opened, so a private result couldn't be "
+                                 "received. Nothing was made.")
         pid = self.queue(prompt)
         labels, weights = labels or {}, weights or {}
         total_w = sum(weights.values()) or 1.0
@@ -869,10 +881,17 @@ class Client:
                     continue
                 except (ConnectionError, OSError):
                     ws = None
+                    if capture:
+                        self.unqueue(pid)
+                        self.interrupt()
+                        raise ComfyError("The live connection to ComfyUI broke, so the private result couldn't be "
+                                         "received.")
                     continue
                 if op == 0x2:
-                    if on_preview and len(data) > 8:
-                        ev = struct.unpack(">I", data[:4])[0]
+                    ev = struct.unpack(">I", data[:4])[0] if len(data) > 8 else 0
+                    if capture and ev == 1 and cur == capture[0]:
+                        capture[1].append(data[8:])
+                    elif on_preview and len(data) > 8:
                         if ev == 1:
                             on_preview(data[8:])
                         elif ev == 4:
