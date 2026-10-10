@@ -412,7 +412,7 @@ class LoraPicker(QDialog):
         v.addWidget(hrow(self.only, self.tag, spacing=10))
         self.list = QListWidget()
         self.list.setItemDelegate(BlurTextDelegate(self.list))
-        self.list.setIconSize(QSize(44, 44))
+        self.list.setIconSize(QSize(56, 56))
         self.list.setSpacing(2)
         self.list.itemDoubleClicked.connect(lambda it: self._pick(it))
         v.addWidget(self.list, 1)
@@ -460,13 +460,13 @@ class LoraPicker(QDialog):
             it.setData(BLUR_ROLE, blur)
             prev = loras.preview_for(self.install, n)
             if prev:
-                pm = QPixmap(prev).scaled(88, 88, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                pm = QPixmap(prev).scaled(112, 112, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                           Qt.TransformationMode.SmoothTransformation)
                 it.setIcon(blur_pixmap(pm, 6) if blur else pm)
             else:
                 it.setIcon(icons.icon("lora", "#6B6B73", 22))
             it.setData(Qt.ItemDataRole.UserRole, n)
-            it.setSizeHint(QSize(0, 54))
+            it.setSizeHint(QSize(0, 66))
             self.list.addItem(it)
         if self.list.count():
             self.list.setCurrentRow(0)

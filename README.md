@@ -46,7 +46,8 @@ strength or model), side by side.
 **A LoRA library.** Every LoRA in your ComfyUI with what it was made for (Illustrious, Pony or plain SDXL told apart
 from the training details, and settable by hand), its trigger words (suggested from the file), notes, the page you got
 it from, a favourite strength and a preview picture. Sort them with tags (character, art style, pose, detailer and your
-own), and blur the names and previews of NSFW ones if you like. WAN LoRAs that come as a high and a low file are paired
+own), and blur the names and previews of NSFW ones if you like. With a Civitai link saved, Fetch fills in the trigger
+words, a small cover picture and what it was made for. WAN LoRAs that come as a high and a low file are paired
 up and share their trigger words. Click a trigger word to put it into the prompt.
 
 **A queue.** Pictures and videos one after the other, with time estimates learned on your PC. Take single pictures out
@@ -115,7 +116,8 @@ gallery where they are.
 Everything you make stays on your PC. Better Comfy only talks to the ComfyUI on this computer, and a ComfyUI it starts
 itself only listens on this computer. There is no account, no telemetry and no upload. Better Comfy goes online to ask GitHub
 whether a new version exists (you can switch that off under Settings, Updates) and, only when you ask for it, to
-download prompt helper models or missing model parts once from Hugging Face and GitHub. The prompt helper itself runs on
+download prompt helper models or missing model parts once from Hugging Face and GitHub, and to read a LoRA's Civitai
+page when you press Fetch. The prompt helper itself runs on
 your PC.
 
 ## Building

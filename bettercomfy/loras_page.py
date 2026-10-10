@@ -1,7 +1,10 @@
 """The LORAS page: every LoRA in your ComfyUI - what it is for (read from the file), trigger words, notes, favourite
 strength, preview pictures - and one click to put it on the Image or Video page."""
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer
+import os
+import threading
+
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
                                QVBoxLayout, QWidget)
@@ -13,6 +16,8 @@ from .widgets import (BLUR_ROLE, BlurTextDelegate, Card, ChipBox, Combo, ImageDr
 
 
 class LorasPage(QWidget):
+    _fetched = Signal(str, object)              # LoRA name, result dict or the error
+    _fetch_done = Signal(int, int)              # how many worked, how many did not
     title = "LoRAs"
     subtitle = "Your LoRA library - trigger words, notes, favourites"
 
@@ -47,6 +52,8 @@ class LorasPage(QWidget):
         lv.addWidget(hrow(self.filter, self.tagf, self.search, self.fav, self.count,
                           icon_button("folder", self._open_folder, "Open ComfyUI's loras folder", size=16),
                           icon_button("refresh", self.link.refresh_models, "Look for new LoRA files", size=16),
+                          icon_button("download", self._fetch_all, "Fetch all: trigger words and covers for every LoRA "
+                                                                    "with a Civitai link", size=16),
                           spacing=10))
         self.grid = QListWidget()
         self.grid.setViewMode(QListWidget.ViewMode.IconMode)
@@ -136,12 +143,19 @@ class LorasPage(QWidget):
         self.add_img = button("Add to Image", lambda: self._add("image"), "Accent", "image")
         self.add_vid = button("Add to Video", lambda: self._add("video"), None, "video")
         self.det.add(hrow(self.add_img, self.add_vid, spacing=8))
-        self.det.add(button("Show the file", self._reveal, "Ghost", "folder"))
+        self.fetch_btn = button("Fetch", self._fetch, "Ghost", "download",
+                                "Trigger words, the first picture as the cover and what it was made for, from its "
+                                "Civitai link")
+        self.det.add(hrow(self.fetch_btn, button("Show the file", self._reveal, "Ghost", "folder"), None, spacing=6))
         self.det.end()
         h.addWidget(side)
         self._icons = {}
         self._dirty = True
         self.link.models.connect(self._models_changed)
+        self._fetched.connect(self._apply_fetch)
+        self._fetch_done.connect(self._fetch_finished)
+        self._fetching = False
+        self.url.textChanged.connect(lambda _t: self._fetch_state())
         self._enable(False)
 
     def _models_changed(self, _lists):
@@ -328,6 +342,7 @@ class LorasPage(QWidget):
         quiet(self.note, self.note.setPlainText, nt.get("note", ""))
         self.strength.set(float(nt.get("strength") or 1.0))
         self.prev.set_path(loras.preview_for(self.link.install(), n) or "", emit=False)
+        self._fetch_state()
         self.sugg.clear()
         have = [w.lower() for w in loras.split_words(nt.get("triggers", ""))]
         sug = [s for s in info.get("suggest") or [] if s.lower() not in have][:14]
@@ -396,6 +411,89 @@ class LorasPage(QWidget):
         if it:
             it.setData(BLUR_ROLE, self._hidden(self.cur))
         self._refresh_icon()
+
+    # ---- fetch (Civitai): trigger words, cover, made for
+    def _fetch_state(self):
+        from . import civitai
+        ok = bool(self.cur) and civitai.parse(self.url.text()) is not None and not self._fetching
+        self.fetch_btn.setEnabled(ok)
+        self.fetch_btn.setToolTip("Trigger words, the first picture as the cover and what it was made for, from its "
+                                  "Civitai link" if ok or self._fetching else
+                                  "Put the LoRA's Civitai page into 'Where it is from' first")
+
+    def _fetch(self):
+        if not self.cur:
+            return
+        self._save("url", self.url.text().strip())
+        self._run_fetch([self.cur])
+
+    def _fetch_all(self):
+        from . import civitai
+        names = [n for n in self._names() if civitai.parse(loras.notes(n).get("url", ""))]
+        if not names:
+            self.app.toast("No LoRA has a Civitai link yet ('Where it is from').", "warn")
+            return
+        self._run_fetch(names)
+
+    def _run_fetch(self, names):
+        from . import civitai
+        if self._fetching:
+            return
+        self._fetching = True
+        self._fetch_state()
+        self.app.toast(f"Fetching {len(names)} LoRA{'s' if len(names) != 1 else ''} from Civitai…", "info")
+        ins = self.link.install()
+        jobs = [(n, loras.notes(n).get("url", ""), comfy.model_path(ins, "loras", n) if ins else None) for n in names]
+
+        def work():
+            ok = bad = 0
+            for n, url, path in jobs:
+                try:
+                    self._fetched.emit(n, civitai.fetch(n, url, path))
+                    ok += 1
+                except Exception as ex:                 # noqa: BLE001 - shown to the user
+                    self._fetched.emit(n, ex)
+                    bad += 1
+            self._fetch_done.emit(ok, bad)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_fetch(self, n, res):
+        from . import civitai
+        if isinstance(res, Exception):
+            if len(self._names()) and self.cur == n:
+                self.app.toast(f"{nice_name(n)}: {res}", "warn")
+            return
+        nt = loras.notes(n)
+        words = loras.split_words(", ".join(loras.split_words(nt.get("triggers", "")) + res["triggers"]))
+        fields = {"triggers": ", ".join(words)}
+        own_cover = nt.get("preview") and not os.path.normcase(nt["preview"]).startswith(
+            os.path.normcase(civitai.COVERS))
+        if res["cover"] and not own_cover:
+            fields["preview"] = res["cover"]           # a cover you set yourself stays
+        if res["made_for"] and not nt.get("made_for"):
+            # only when it fits what the file itself is (a link without a version may point at another base)
+            fam = self._info(n).get("family", "other")
+            fits = {"sdxl": ("illustrious", "pony", "sdxl")}.get(fam, (fam,))
+            if fam == "other" or res["made_for"] in fits:
+                fields["made_for"] = res["made_for"]
+        loras.set_note(n, **fields)
+        part = self._half(n)[1]
+        if part:
+            loras.set_note(part, triggers=fields["triggers"])
+        if n == self.cur:
+            self.show(n)
+        self._icons = {k: v for k, v in self._icons.items() if k[0] != n}
+        for i in range(self.grid.count()):
+            it = self.grid.item(i)
+            if it.data(Qt.ItemDataRole.UserRole) == n:
+                it.setIcon(self._icon(n))
+
+    def _fetch_finished(self, ok, bad):
+        self._fetching = False
+        self._fetch_state()
+        if ok + bad > 1 or not bad:
+            self.app.toast(f"Fetched {ok}" + (f", {bad} didn't work (no link, gone, or offline)" if bad else "") + ".",
+                           "ok" if not bad else "warn")
 
     def _enable(self, on):
         for w in (self.star, self.prev, self.trig, self.note, self.strength, self.add_img, self.add_vid, self.url,
