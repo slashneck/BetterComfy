@@ -110,11 +110,9 @@ class History(QObject):
             self.items = [e for e in self.items if e.get("id") not in ids]
             for i in ids:
                 self._by_id.pop(i, None)
-            if purge:
-                self._rewrite(shred_old=True)
-            else:
-                for i in ids:
-                    self._append({"id": i, "_deleted": True})
+            # the file is written again without them (a "deleted" mark would leave their prompts in it);
+            # with shredding the old file is overwritten first
+            self._rewrite(shred_old=purge)
         for i in ids:
             self.removed.emit(i)
 

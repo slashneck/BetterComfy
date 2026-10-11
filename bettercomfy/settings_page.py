@@ -14,12 +14,65 @@ from .widgets import (ChipBox, Combo, Card, Scroll, Segmented, Slider, ToggleRow
                       set_combo, vcol)
 
 
+class _Masonry(QWidget):
+    """The cards in as many columns as fit (two or three), each one going to the column that is shortest so far,
+    so no side of the page stays empty."""
+
+    def __init__(self, min_col=430, gap=14):
+        super().__init__()
+        self.cards, self.min_col, self.gap, self._n = [], min_col, gap, 0
+        self.h = QHBoxLayout(self)
+        self.h.setContentsMargins(0, 0, 0, 0)
+        self.h.setSpacing(gap)
+        self.h.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+    def add(self, w, with_last=False):
+        """with_last: stays in the same column as the card before it (they belong together)."""
+        w.setParent(self)
+        self.cards.append((w, with_last))
+
+    def _cols(self):
+        return max(2, min(3, (self.width() + self.gap) // (self.min_col + self.gap)))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self._cols() != self._n:
+            self.arrange()
+
+    def arrange(self):
+        n = self._n = self._cols()
+        while self.h.count():
+            it = self.h.takeAt(0)
+            lay = it.layout()
+            if lay is not None:
+                while lay.count():
+                    lay.takeAt(0)
+                lay.deleteLater()
+        cols = []
+        for _ in range(n):
+            col = QVBoxLayout()
+            col.setSpacing(self.gap)
+            self.h.addLayout(col, 1)
+            cols.append([col, 0])
+        width = max(200, (self.width() - self.gap * (n - 1)) // n)
+        last = cols[0]
+        for w, with_last in self.cards:
+            target = last if with_last else min(cols, key=lambda c: c[1])
+            target[0].addWidget(w)
+            hgt = w.heightForWidth(width) if w.hasHeightForWidth() else -1
+            target[1] += (hgt if hgt > 0 else w.sizeHint().height()) + self.gap
+            last = target
+        for col, _h in cols:
+            col.addStretch(1)
+
+
 class SettingsPage(QWidget):
     title = "Settings"
     subtitle = "ComfyUI, folders, queue, look & feel"
     accent_changed = Signal()
     _drive_found = Signal(str)
     _privacy_found = Signal(str)
+    _cleanup_found = Signal(object)
 
     def __init__(self, app):
         super().__init__()
@@ -29,16 +82,8 @@ class SettingsPage(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         sc = Scroll((28, 18, 28, 28), 14)
         v.addWidget(sc)
-        cols = QHBoxLayout()
-        cols.setSpacing(14)
-        left, right = QVBoxLayout(), QVBoxLayout()
-        left.setSpacing(14)
-        right.setSpacing(14)
-        cols.addLayout(left, 1)
-        cols.addLayout(right, 1)
-        holder = QWidget()
-        holder.setLayout(cols)
-        sc.add(holder)
+        self.cards = cards = _Masonry()
+        sc.add(cards)
         sc.end()
 
         # ---------------------------------------------------------------- ComfyUI
@@ -84,7 +129,7 @@ class SettingsPage(QWidget):
                    button("Models folder", lambda: self._open_sub("models"), "Ghost", "folder"),
                    button("Log", self._log, "Ghost", "info"),
                    button("Rescan", self._rescan, "Ghost", "refresh"), None, spacing=4))
-        left.addWidget(c)
+        cards.add(c)
 
         # ---------------------------------------------------------------- setup check
         self.check = Card("Setup check")
@@ -98,7 +143,7 @@ class SettingsPage(QWidget):
         self.repair_row = vcol(self.repair_lbl, hrow(self.repair_btn, None), spacing=6)
         self.repair_row.hide()
         self.check.add(self.repair_row)
-        left.addWidget(self.check)
+        cards.add(self.check, with_last=True)
 
         # ---------------------------------------------------------------- output
         c = Card("Output")
@@ -111,7 +156,7 @@ class SettingsPage(QWidget):
                         lambda v: cfg.set("embed_metadata", v)),
               hrow(button("ComfyUI input", lambda: self._open_sub("input"), "Ghost", "folder"),
                    button("ComfyUI output", lambda: self._open_sub("output"), "Ghost", "folder"), None, spacing=4))
-        right.addWidget(c)
+        cards.add(c)
 
         # ---------------------------------------------------------------- deleting
         from . import shred
@@ -129,11 +174,38 @@ class SettingsPage(QWidget):
         if not has_eraser:
             c.add(label("Eraser isn't installed on this PC, so 'Eraser' uses the built-in shredder.", "Faint",
                         wrap=True))
-        right.addWidget(c)
+        cards.add(c)
         self._del_mode(cfg.get("delete_mode", "recycle"), save=False)
         self._drive_found.connect(self._show_drive)
         threading.Thread(target=lambda: self._drive_found.emit(shred.drive_kind(cfg.get("image_dir"))),
                          daemon=True).start()
+
+        # ---------------------------------------------------------------- clean up
+        from .cleanup import Cleanup
+        self.cleanup = Cleanup(app)
+        c = Card("Clean up")
+        c.add(label("What generating leaves behind besides your pictures and videos. Files go the way 'Deleting' "
+                    "above says.", "Faint", wrap=True))
+        self.clean_rows = {}
+        for key, title, what in self.cleanup.parts():
+            info = label("", "Faint")
+            btn = button("Clean", lambda k=key: self._clean(k), "Ghost", "trash")
+            btn.setToolTip(what)
+            row = hrow(vcol(label(title, None), info, spacing=0), None, btn, spacing=6)
+            row.setToolTip(what)
+            self.clean_rows[key] = (info, btn)
+            c.add(row)
+        c.add(hrow(button("Look again", self._scan_cleanup, "Ghost", "refresh"), None,
+                   button("Clean all", self._clean_all, "Ghost", "trash", icon_color="#FF8A8A"), spacing=6),
+              ToggleRow("Keep ComfyUI tidy", "After each job its uploaded pictures, temporary copies and history entry "
+                                             "in ComfyUI go", cfg.get("comfy_tidy", True),
+                        lambda v: cfg.set("comfy_tidy", v)),
+              ToggleRow("Deleting a picture also forgets its prompt", "Takes it out of the prompt history (unless "
+                                                                      "another picture still has it)",
+                        cfg.get("forget_prompts", True), lambda v: cfg.set("forget_prompts", v)))
+        cards.add(c)
+        self._cleanup_found.connect(self._show_cleanup)
+        self._cleanup_scanned = False
 
         # ---------------------------------------------------------------- vault
         c = Card("Vault")
@@ -153,7 +225,7 @@ class SettingsPage(QWidget):
                                                      "queue is working or a vault video plays.", label_w=110),
               ToggleRow("Lock when minimized", "Once the queue is done, if it is still working",
                         cfg.get("vault_lock_minimized", True), lambda v: cfg.set("vault_lock_minimized", v)))
-        right.addWidget(c)
+        cards.add(c)
         self.vault_status()
 
         # ---------------------------------------------------------------- privacy
@@ -177,7 +249,7 @@ class SettingsPage(QWidget):
         c.add(label("This PC", "Muted"), self.pc_report, hrow(self.pc_check, None))
         self._privacy_found.connect(self._show_privacy)
         self._pc_checked = False
-        right.addWidget(c)
+        cards.add(c)
 
         # ---------------------------------------------------------------- prompt helper
         c = Card("Prompt helper")
@@ -208,7 +280,7 @@ class SettingsPage(QWidget):
                                               lambda v: cfg.set("sentences_by", v), cfg.get("sentences_by", "auto"),
                                               height=30),
                     "Video motion is always written by the writing model.", label_w=110))
-        right.addWidget(c)
+        cards.add(c)
         self.helper_status()
 
         # ---------------------------------------------------------------- tag blacklist
@@ -231,7 +303,7 @@ class SettingsPage(QWidget):
         self.bl_clear = button("Clear all", self._bl_clear_all, "Ghost", "trash", icon_color="#FF8A8A")
         c.add(self.bl_info, hrow(self.bl_edit, button("Add", self._bl_add, "Ghost", "plus"), spacing=6), self.bl_box,
               hrow(None, self.bl_clear))
-        right.addWidget(c)
+        cards.add(c)
         self._bl_fill()
 
         # ---------------------------------------------------------------- queue
@@ -247,7 +319,7 @@ class SettingsPage(QWidget):
                         cfg.get("free_after_queue"), lambda v: cfg.set("free_after_queue", v)),
               ToggleRow("Notification when it is done", None, cfg.get("notify_done"), lambda v: cfg.set("notify_done", v)),
               ToggleRow("Sound when it is done", None, cfg.get("sound_done"), lambda v: cfg.set("sound_done", v)))
-        right.addWidget(c)
+        cards.add(c)
 
         # ---------------------------------------------------------------- look
         c = Card("Look & feel")
@@ -278,7 +350,7 @@ class SettingsPage(QWidget):
         set_combo(self.start_page, cfg.get("start_page"))
         self.start_page.currentIndexChanged.connect(lambda _=0: cfg.set("start_page", self.start_page.currentData()))
         c.add(field("Open on", self.start_page, label_w=90))
-        right.addWidget(c)
+        cards.add(c)
         self._paint_swatches()
 
         # ---------------------------------------------------------------- app
@@ -297,7 +369,7 @@ class SettingsPage(QWidget):
                         cfg.get("confirm_delete"), lambda v: cfg.set("confirm_delete", v)))
         c.add(hrow(button("App data folder", lambda: system.open_folder(BASE), "Ghost", "folder"), None,
                    button("Reset settings", self._reset, "Danger"), spacing=6))
-        right.addWidget(c)
+        cards.add(c)
 
         # ---------------------------------------------------------------- updates
         c = Card("Updates")
@@ -310,7 +382,7 @@ class SettingsPage(QWidget):
         self.upd_install = button("Restart and update", lambda: self.app.update_now(), "Accent", "download")
         self.upd_install.hide()
         c.add(self.t_upd, self.upd_status, hrow(self.upd_check, self.upd_install, None, spacing=6))
-        right.addWidget(c)
+        cards.add(c)
 
         # ---------------------------------------------------------------- about
         c = Card(None)
@@ -321,9 +393,7 @@ class SettingsPage(QWidget):
         lg.setPixmap(pm)
         c.add(hrow(lg, vcol(label(APP_NAME, "H2"), label(f"Version {VERSION}", "Faint"),
                             label("Image & video generation on ComfyUI", "Muted"), spacing=2), None, spacing=14))
-        right.addWidget(c)
-        left.addStretch(1)
-        right.addStretch(1)
+        cards.add(c)
 
         self.link.status.connect(self._status)
         self.link.models.connect(lambda _l: self._check())
@@ -477,6 +547,54 @@ class SettingsPage(QWidget):
         src = {"comfy": "read from the running ComfyUI", "files": "read from its model folders"}.get(L.get("source"), "")
         self.check_body.setText("<table>" + "".join(rows) + "</table>" +
                                 (f"<p style='color:{T.TEXT3}; font-size:12px'>Lists {src}.</p>" if src else ""))
+
+    # ---- clean up
+    def _scan_cleanup(self):
+        for info, btn in self.clean_rows.values():
+            info.setText("Looking…")
+            btn.setEnabled(False)
+
+        def work():
+            res = {}
+            for key, _t, _w in self.cleanup.parts():
+                try:
+                    res[key] = self.cleanup.scan(key)
+                except Exception:
+                    res[key] = (0, None)
+            self._cleanup_found.emit(res)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_cleanup(self, res):
+        for key, (n, size) in res.items():
+            info, btn = self.clean_rows[key]
+            if not n:
+                info.setText("Nothing there")
+            else:
+                info.setText(f"{n} {'thing' if n == 1 else 'things'}" +
+                             (f"  ·  {size / 2 ** 20:.1f} MB" if size else ""))
+            btn.setEnabled(bool(n))
+
+    def _clean(self, key):
+        left = self.cleanup.clean(key)
+        if left == -1:
+            self.app.toast("Not while something is being made - ComfyUI is using that folder.", "warn")
+        elif left:
+            self.app.toast(f"{left} {'file was' if left == 1 else 'files were'} in use and stayed.", "warn")
+        else:
+            self.app.toast("Cleaned.", "ok")
+        self._scan_cleanup()
+
+    def _clean_all(self):
+        if QMessageBox.question(self, "Clean up", "Clean everything listed here? Your pictures, videos, gallery and "
+                                                  "vault stay.") != QMessageBox.StandardButton.Yes:
+            return
+        skipped = 0
+        for key, _t, _w in self.cleanup.parts():
+            if self.cleanup.clean(key) not in (0, None):
+                skipped += 1
+        self.app.toast("Cleaned." if not skipped else "Cleaned. Some parts were busy and stayed.",
+                       "ok" if not skipped else "warn")
+        self._scan_cleanup()
 
     # ---- privacy check (only reads how Windows is set up)
     def _check_pc(self):
@@ -687,6 +805,9 @@ class SettingsPage(QWidget):
         if not self._pc_checked:
             self._pc_checked = True
             self._check_pc()
+        if not self._cleanup_scanned:
+            self._cleanup_scanned = True
+            self._scan_cleanup()
 
     def _del_mode(self, mode, save=True):
         from . import shred

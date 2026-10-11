@@ -156,16 +156,23 @@ def ref_size(ref):
     return media.image_size(ref)
 
 
+def tidy():
+    """After every job ComfyUI's copies go: uploaded pictures, temporary results, its history entry (Settings)."""
+    return bool(cfg.get("comfy_tidy", True))
+
+
 class _Trail:
-    """What a private job left in ComfyUI's folders (uploaded pictures, temp results): shredded when it ends."""
+    """What a job left in ComfyUI's folders (uploaded pictures, temporary results): shredded when a private job
+    ends, simply deleted after a normal one (when ComfyUI is kept tidy)."""
 
     def __init__(self, ctx, private):
         self.ctx, self.private, self.files = ctx, private, []
+        self.keep_track = private or tidy()
 
     def upload(self, data, name):
         c = self.ctx.client
         ref = c.upload(data, (PRIVATE_PREFIX + uuid.uuid4().hex + ".png") if self.private else name)
-        if self.private:
+        if self.keep_track:
             ins = self.ctx.w.link.install()
             if ins:
                 self.files.append(os.path.join(comfy.sub_dir(ins, "input"), *ref.split("/")))
@@ -173,7 +180,7 @@ class _Trail:
 
     def temp(self, f):
         ins = self.ctx.w.link.install()
-        if ins and self.private:
+        if ins and self.keep_track and f.get("type", "temp") in ("temp", "output"):
             self.files.append(os.path.join(comfy.sub_dir(ins, f.get("type", "temp")), *(f.get("subfolder") or "").split("/"),
                                            f["filename"]))
 
@@ -181,7 +188,13 @@ class _Trail:
         if self.files:
             from . import shred
             for f in self.files:
-                shred.shred_file(f)
+                if self.private:
+                    shred.shred_file(f)
+                else:
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
             self.files = []
 
 
@@ -319,11 +332,13 @@ def _run_image(ctx, job, c, p, op, src, lists, private, trail):
         t0 = time.time()
         cap = (_ws_output(P, c), []) if private else None
         hist = ctx.run(i, P, labels, lambda f, t, i=i: ctx.progress((i + 0.97 * f) / n, t + tag), ctx.preview,
-                       weights, cap if cap and cap[0] else None, forget=private)
+                       weights, cap if cap and cap[0] else None,
+                       forget=private or tidy())
         if hist is None:
             continue
-        if private:
+        if private or tidy():
             c.forget((hist.get("prompt") or [None, None])[1])
+        if private:
             datas = cap[1] if cap[0] else []
             if not cap[0]:
                 for f in comfy.result_images(hist):
@@ -338,6 +353,8 @@ def _run_image(ctx, job, c, p, op, src, lists, private, trail):
                 raise comfy.ComfyError("ComfyUI made no picture")
         for fi, f in enumerate(files):
             data = datas[fi] if private else c.fetch(f)
+            if not private:
+                trail.temp(f)
             stamp = time.strftime("%H%M%S")
             suffix = {"upscale": "_up", "inpaint": "_edit"}.get(op, "")
             path = media.unique(os.path.join(_out_dir("image"), f"BC_{stamp}_{seed}{suffix}.png"))
@@ -442,10 +459,11 @@ def _run_video(ctx, job, c, p, mode, private, trail):
         t0 = time.time()
         cap = (_ws_output(P, c), []) if private else None
         hist = ctx.run(v, P, labels, lambda f, t, v=v: ctx.progress((v + 0.93 * f) / n, t + tag), ctx.preview,
-                       weights, cap if cap and cap[0] else None, forget=private)
+                       weights, cap if cap and cap[0] else None,
+                       forget=private or tidy())
         if hist is None:
             continue
-        if private:
+        if private or tidy():
             c.forget((hist.get("prompt") or [None, None])[1])
         if private and cap[0]:
             frames = [media.decode(b) for b in cap[1]]
@@ -761,6 +779,28 @@ class Queue(QObject):
         if cur:
             self.cancel(cur["id"])
         self._dirty()
+
+    def forget_entries(self, ids):
+        """Pictures / videos that were deleted: their finished jobs go from the queue list too (it keeps the
+        prompt and settings), or at least their lines in them."""
+        ids = set(ids)
+        changed = False
+        for j in list(self.jobs):
+            if j["status"] in ("queued", "running"):
+                continue
+            touched = False
+            for it in j.get("items") or []:
+                ents = it.get("entries") or []
+                left = [x for x in ents if x not in ids]
+                if len(left) != len(ents):
+                    it["entries"] = left
+                    touched = True
+            if touched:
+                changed = True
+                if not any(it.get("entries") for it in j.get("items") or []):
+                    self.jobs.remove(j)
+        if changed:
+            self._dirty()
 
     def clear_finished(self):
         self.jobs = [j for j in self.jobs if j["status"] in ("queued", "running")]

@@ -878,6 +878,7 @@ class GenerateBar(QWidget):
         self.stop_slot.setFixedWidth(0)
         self._slot_w = 0.0
         self._slot_anim = None
+        self.stop_btn.hide()
         gl.addWidget(self.stop_slot)
         self.lock = QPushButton()
         self.lock.setObjectName("Icon")

@@ -845,6 +845,15 @@ class Window(QMainWindow):
                 caches.append(e["thumb"])
         self.history.remove_many([e["id"] for e in entries], purge=mode != "recycle")
         self.forget_pictures([e["file"] for e in entries])
+        self.queue.forget_entries([e["id"] for e in entries])
+        if cfg.get("forget_prompts", True):
+            # their prompts leave the prompt history too, unless a picture that is still there has the same one
+            gone = {(e.get("prompt") or "").strip() for e in entries}
+            still = {(x.get("prompt") or "").strip() for x in self.history.items}
+            hist = cfg.get("prompt_history") or []
+            new = [t for t in hist if t.strip() not in gone or t.strip() in still]
+            if len(new) != len(hist):
+                cfg.set("prompt_history", new)
         if self.viewer.isVisible():
             self.viewer.drop([e["id"] for e in entries])
         if mode == "recycle":
