@@ -566,8 +566,9 @@ class MarketView(QWidget):
         if not f:
             return False
         base = (C.safe_name(f.get("name")) or "").lower()
+        keys = self.list_key if isinstance(self.list_key, (tuple, list)) else (self.list_key,)
         return any(n.replace("\\", "/").rsplit("/", 1)[-1].lower() == base
-                   for n in self.link.lists.get(self.list_key) or [])
+                   for k in keys for n in self.link.lists.get(k) or [])
 
     def _dl_state(self):
         v = self._ver()

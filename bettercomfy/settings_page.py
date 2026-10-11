@@ -238,8 +238,9 @@ class SettingsPage(QWidget):
               ToggleRow("Block screen capture while the vault is open", "The same, only while the vault is unlocked",
                         cfg.get("vault_hide_capture", True),
                         lambda v: (cfg.set("vault_hide_capture", v), self.app._capture_guard())),
-              ToggleRow("Blur NSFW LoRAs", "Names and previews of LoRAs tagged NSFW are blurred everywhere in the "
-                                           "app (the eye on the LoRAs page shows one)",
+              ToggleRow("Blur NSFW LoRAs and models", "Names and covers of LoRAs and models tagged NSFW (and NSFW "
+                                                      "ones in the Market) are blurred everywhere in the app (the eye "
+                                                      "shows one)",
                         cfg.get("lora_blur_nsfw", False), self._blur_loras),
               ToggleRow("Clear ComfyUI's memory after private jobs", "Once the queue is done, no private picture stays "
                                                                      "in ComfyUI's cache. The models load again for "
@@ -761,10 +762,13 @@ class SettingsPage(QWidget):
 
     def _blur_loras(self, on):
         cfg.set("lora_blur_nsfw", on)
-        lp = self.app.pages.get("loras")
-        if lp is not None:
-            lp._icons.clear()
-            lp._dirty = True
+        for key in ("loras", "models"):
+            lp = self.app.pages.get(key)
+            if lp is not None:
+                lp._icons.clear()
+                lp._dirty = True
+                if getattr(lp, "market", None) is not None:
+                    lp.market._icons.clear()
         for k in ("image", "video"):
             self.app.pages[k].loras.rebuild()
 
