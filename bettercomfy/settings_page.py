@@ -2,7 +2,7 @@
 import os
 import threading
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
 from PySide6.QtWidgets import QColorDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
     QPushButton, QSizePolicy, QVBoxLayout, QWidget
@@ -18,9 +18,9 @@ class _Masonry(QWidget):
     """The cards in as many columns as fit (two or three), each one going to the column that is shortest so far,
     so no side of the page stays empty."""
 
-    def __init__(self, min_col=430, gap=14):
+    def __init__(self, min_col=540, gap=14):
         super().__init__()
-        self.cards, self.min_col, self.gap, self._n = [], min_col, gap, 0
+        self.cards, self.min_col, self.gap, self._n, self._room = [], min_col, gap, 0, 0
         self.h = QHBoxLayout(self)
         self.h.setContentsMargins(0, 0, 0, 0)
         self.h.setSpacing(gap)
@@ -32,10 +32,12 @@ class _Masonry(QWidget):
         self.cards.append((w, with_last))
 
     def _cols(self):
-        return max(2, min(3, (self.width() + self.gap) // (self.min_col + self.gap)))
+        return max(2, min(3, (self._room + self.gap) // (self.min_col + self.gap)))
 
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
+    def fit(self, room):
+        """room: the width there is to show them in (the scroll area's, not this widget's: three columns would
+        otherwise hold it wide and never give way)."""
+        self._room = room
         if self._cols() != self._n:
             self.arrange()
 
@@ -54,7 +56,7 @@ class _Masonry(QWidget):
             col.setSpacing(self.gap)
             self.h.addLayout(col, 1)
             cols.append([col, 0])
-        width = max(200, (self.width() - self.gap * (n - 1)) // n)
+        width = max(200, (self._room - self.gap * (n - 1)) // n)
         last = cols[0]
         for w, with_last in self.cards:
             target = last if with_last else min(cols, key=lambda c: c[1])
@@ -80,7 +82,7 @@ class SettingsPage(QWidget):
         self.link = app.link
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
-        sc = Scroll((28, 18, 28, 28), 14)
+        self._scroll = sc = Scroll((28, 18, 28, 28), 14)
         v.addWidget(sc)
         self.cards = cards = _Masonry()
         sc.add(cards)
@@ -250,6 +252,28 @@ class SettingsPage(QWidget):
         self._privacy_found.connect(self._show_privacy)
         self._pc_checked = False
         cards.add(c)
+
+        # ---------------------------------------------------------------- civitai
+        self.civ_card = c = Card("Civitai")
+        self.civ_state = label("", "Muted", wrap=True)
+        self.civ_key = QLineEdit()
+        self.civ_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.civ_key.setPlaceholderText("Paste your API key")
+        self.civ_key.returnPressed.connect(self._civ_save)
+        self.civ_remove = button("Remove", self._civ_clear, "Ghost", "trash")
+        c.add(label("Browsing the Market needs no key, NSFW included. Some creators only allow downloads when you "
+                    "are logged in: with a key, those download too.", "Faint", wrap=True),
+              self.civ_state,
+              hrow(self.civ_key, button("Save", self._civ_save, "Accent", "check"), self.civ_remove, spacing=6),
+              label("How to get one:<br>1. Log in on civitai.com or civitai.red.<br>"
+                    "2. Click your profile picture, then the gear (Account settings).<br>"
+                    "3. Scroll down to <b>API Keys</b>, press <b>Add API key</b>, give it any name and copy the key."
+                    "<br>4. Paste it here and press Save.", "Faint", wrap=True),
+              label("The key is kept encrypted for your Windows account and only sent to Civitai, with downloads. "
+                    "You can delete it on Civitai at any time.", "Faint", wrap=True),
+              hrow(button("Open Civitai's account settings", self._civ_open, "Ghost", "external"), None))
+        cards.add(c)
+        self._civ_show()
 
         # ---------------------------------------------------------------- prompt helper
         c = Card("Prompt helper")
@@ -548,6 +572,40 @@ class SettingsPage(QWidget):
         self.check_body.setText("<table>" + "".join(rows) + "</table>" +
                                 (f"<p style='color:{T.TEXT3}; font-size:12px'>Lists {src}.</p>" if src else ""))
 
+    # ---- civitai key
+    def _civ_show(self):
+        from . import civitai
+        has = bool(civitai.api_key())
+        self.civ_state.setText("Key added." if has else "No key added.")
+        self.civ_remove.setVisible(has)
+        self.civ_key.setPlaceholderText("Paste a new key to replace it" if has else "Paste your API key")
+
+    def _civ_save(self):
+        from . import civitai
+        k = self.civ_key.text().strip()
+        if not k:
+            return
+        if len(k) < 20 or any(ch.isspace() for ch in k):
+            self.app.toast("That does not look like a Civitai API key.", "warn")
+            return
+        civitai.set_api_key(k)
+        self.civ_key.clear()
+        self._civ_show()
+        self.app.toast("Key saved.", "ok")
+
+    def _civ_clear(self):
+        from . import civitai
+        civitai.set_api_key("")
+        self._civ_show()
+        self.app.toast("Key removed.", "ok")
+
+    def _civ_open(self):
+        QDesktopServices.openUrl(QUrl("https://civitai.com/user/account"))
+
+    def show_civitai(self):
+        """From the Market: straight to the key."""
+        QTimer.singleShot(150, lambda: (self._scroll.ensureWidgetVisible(self.civ_card, 0, 40), self.civ_key.setFocus()))
+
     # ---- clean up
     def _scan_cleanup(self):
         for info, btn in self.clean_rows.values():
@@ -797,6 +855,10 @@ class SettingsPage(QWidget):
         self.app.pages["gallery"].vault_changed()
         self.vault_status()
         self.app.toast("The vault is deleted.", "info")
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.cards.fit(self._scroll.viewport().width() - 56)       # the scroll area's side margins
 
     def showEvent(self, e):
         super().showEvent(e)

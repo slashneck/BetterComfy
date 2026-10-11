@@ -54,6 +54,11 @@ DEFAULTS = {
     "capture_block_app": False,
     "comfy_forget_private": True,
     "lora_blur_nsfw": False,
+    "market_site": "civitai.red",     # the Market: which Civitai, sort, NSFW shown (off at first), favourites
+    "market_sort": 0,
+    "market_nsfw": False,
+    "market_favs": [],
+    "civitai_key": None,              # the optional API key, encrypted for this Windows account (DPAPI)
     "comfy_tidy": True,               # after each job: its uploads, temporary copies and history entry in ComfyUI go
     "forget_prompts": True,           # deleting a picture also takes its prompt out of the prompt history
     "collections_leave": True,        # a picture put into a collection no longer shows in All

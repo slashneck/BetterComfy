@@ -7,17 +7,19 @@ import threading
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
-                               QVBoxLayout, QWidget)
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from . import comfy, icons, loras, system, theme as T, workflows as W
 from .config import cfg
-from .widgets import (BLUR_ROLE, BlurTextDelegate, Card, ChipBox, Combo, ImageDrop, Scroll, Slider, ToggleRow, blur_pixmap,
+from .widgets import (BLUR_ROLE, BlurTextDelegate, Card, ChipBox, Combo, ImageDrop, Scroll, Segmented, Slider, ToggleRow,
+                      blur_pixmap,
                       blur_widget, button, chip, field, hrow, icon_button, label, nice_name, quiet, set_combo)
 
 
 class LorasPage(QWidget):
     _fetched = Signal(str, object)              # LoRA name, result dict or the error
     _fetch_done = Signal(int, int)              # how many worked, how many did not
+    _noted = Signal()                           # a Market download got its notes
     title = "LoRAs"
     subtitle = "Your LoRA library - trigger words, notes, favourites"
 
@@ -26,7 +28,16 @@ class LorasPage(QWidget):
         self.app = app
         self.link = app.link
         self.cur = None
-        h = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack)
+        lib = QWidget()
+        self.stack.addWidget(lib)
+        # Library | Market - the same switch on both (the Market has its own toolbar)
+        self.switches = [Segmented([("lib", "Library"), ("market", "Market", "Browse and download from Civitai")],
+                                   self._switch, "lib", expand=False) for _ in range(2)]
+        h = QHBoxLayout(lib)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
         left = QWidget()
@@ -54,7 +65,7 @@ class LorasPage(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _t: self.fill())
         self.count = label("", "Faint")
-        lv.addWidget(hrow(self.filter, self.tagf, self.sort, self.search, self.fav, self.count,
+        lv.addWidget(hrow(self.switches[0], self.filter, self.tagf, self.sort, self.search, self.fav, self.count,
                           icon_button("folder", self._open_folder, "Open ComfyUI's loras folder", size=16),
                           icon_button("refresh", self.link.refresh_models, "Look for new LoRA files", size=16),
                           icon_button("download", self._fetch_all, "Fetch all: trigger words and covers for every LoRA "
@@ -158,14 +169,60 @@ class LorasPage(QWidget):
                           spacing=6))
         self.det.end()
         h.addWidget(side)
+        self.market = None              # made the first time it is opened
         self._icons = {}
         self._dirty = True
         self.link.models.connect(self._models_changed)
         self._fetched.connect(self._apply_fetch)
+        self._noted.connect(self._after_market)
         self._fetch_done.connect(self._fetch_finished)
         self._fetching = False
         self.url.textChanged.connect(lambda _t: self._fetch_state())
         self._enable(False)
+
+    def _switch(self, key):
+        for s in self.switches:
+            s.set(key)
+        if key == "market" and self.market is None:
+            from .market import MarketView
+            self.market = MarketView(self.app, self.switches[1], "LORA", "models/loras", "loras", self._from_market)
+            self.stack.addWidget(self.market)
+        self.stack.setCurrentWidget(self.market if key == "market" else self.stack.widget(0))
+        if key == "lib" and self._dirty:
+            self.fill()
+
+    def _from_market(self, name, model, version, host):
+        """A LoRA downloaded in the Market: its link, trigger words, cover and what it is made for (runs in a
+        thread: the cover is fetched)."""
+        from . import civitai
+        words = []
+        for w in version.get("trainedWords") or []:
+            for part in str(w).split(","):
+                part = part.strip()
+                if part and part not in words:
+                    words.append(part)
+        fields = {"url": civitai.page_link(host, model["id"], version.get("id")), "triggers": ", ".join(words)}
+        fam = civitai.made_for(version.get("baseModel"))
+        if fam:
+            fields.update(made_for=fam, made_for_src="fetch")
+        if model.get("nsfw"):
+            fields["tags"] = ["NSFW"]
+        try:
+            cover = civitai.save_cover(version, name)
+        except Exception:
+            cover = None
+        if cover:
+            fields["preview"] = cover
+        loras.set_note(name, **fields)
+        self._noted.emit()
+
+    def _after_market(self):
+        self._icons.clear()
+        self._fill_tag_filter()
+        if self.stack.currentIndex() == 0 and self.isVisible():
+            self.fill()
+        else:
+            self._dirty = True
 
     def _models_changed(self, _lists):
         if self.isVisible():
