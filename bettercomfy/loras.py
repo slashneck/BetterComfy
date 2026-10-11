@@ -115,6 +115,10 @@ def file_info(path):
             info["family"] = "sdxl"
         elif "lora_unet_down_blocks" in joined or "lora_te_text_model" in joined:
             info["family"] = "sd15"
+        elif re.search(r"blocks[._]\d+[._]attn[._]w[qkvo]\b|blocks[._]\d+[._]mlp[._](gate|up|down)\b|txtfusion", joined):
+            info["family"] = "krea2"                   # Krea 2: attn.wq / mlp.gate (WAN has cross_attn / ffn)
+        elif re.search(r"(self|cross)_attn[._](q|k|v|output)_proj|adaln_modulation|llm_adapter", joined):
+            info["family"] = "anima"                   # Anima (Cosmos): q_proj / output_proj, adaln modulation
         elif re.search(r"(^|\.)blocks\.\d+\.(cross_attn|self_attn|ffn)", joined) or "diffusion_model.blocks" in joined:
             info["family"] = "wan"
         elif "double_blocks" in joined or "single_blocks" in joined or "transformer.single_transformer" in joined:
@@ -213,6 +217,19 @@ def fit(name, info, target):
 
 
 # ------------------------------------------------------------------------------------------------ tags
+
+def forget(name):
+    """A LoRA that is gone: its notes go too."""
+    with _lock:
+        if _DATA.pop(name, None) is not None:
+            try:
+                tmp = _FILE + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(_DATA, fh, ensure_ascii=False, indent=1)
+                os.replace(tmp, _FILE)
+            except OSError:
+                pass
+
 
 def lora_tags(name):
     return list(notes(name).get("tags") or [])

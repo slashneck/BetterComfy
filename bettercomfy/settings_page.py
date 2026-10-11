@@ -286,6 +286,11 @@ class SettingsPage(QWidget):
         self.desk_btn = button("Shortcut on the desktop", lambda: self._shortcut(system.desktop_dir()), None, "shortcut")
         self.menu_btn = button("Start menu entry", lambda: self._shortcut(system.start_menu_dir()), "Ghost", "shortcut")
         c.add(hrow(self.desk_btn, self.menu_btn, None, spacing=6))
+        c.add(ToggleRow("Pictures in a collection leave All", "Once you put them into a collection they only show "
+                                                             "there (and in Favourites / Marked)",
+                        cfg.get("collections_leave", True), lambda v: self._leave("collections_leave", v)),
+              ToggleRow("Vault pictures in a collection leave Vault", "The same for the vault's collections",
+                        cfg.get("vault_collections_leave", True), lambda v: self._leave("vault_collections_leave", v)))
         c.add(ToggleRow("Close to the tray", "The window hides, the queue keeps working (quit from the tray icon)",
                         cfg.get("close_to_tray"), lambda v: cfg.set("close_to_tray", v)),
               ToggleRow("Ask before deleting", "Deleted results go to the recycle bin either way",
@@ -571,6 +576,12 @@ class SettingsPage(QWidget):
                 QMessageBox.StandardButton.Yes:
             tags.set_blacklist([])
             self._bl_fill()
+
+    def _leave(self, key, on):
+        cfg.set(key, on)
+        g = self.app.pages["gallery"]
+        g._fill_nav()
+        g._dirty = True
 
     def _blur_loras(self, on):
         cfg.set("lora_blur_nsfw", on)

@@ -53,7 +53,9 @@ DEFAULTS = {
     "gallery_sort": "new",
     "capture_block_app": False,
     "comfy_forget_private": True,
-    "lora_blur_nsfw": False,          # names and previews of LoRAs tagged NSFW are blurred     # after private jobs ComfyUI clears its cache (and unloads the models)       # the whole app is left out of screenshots, recordings and screen sharing
+    "lora_blur_nsfw": False,
+    "collections_leave": True,        # a picture put into a collection no longer shows in All
+    "vault_collections_leave": True,  # the same for the vault and its collections          # names and previews of LoRAs tagged NSFW are blurred     # after private jobs ComfyUI clears its cache (and unloads the models)       # the whole app is left out of screenshots, recordings and screen sharing
     "helper_dir": "",                 # where the prompt helper was set up ("" = in the app's data folder)
     "helper_model": "",
     "helper_button": True,

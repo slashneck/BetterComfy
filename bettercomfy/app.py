@@ -185,6 +185,9 @@ class Window(QMainWindow):
         self.queue.finished.connect(self._queue_done)
         self.queue.output.connect(self._output)
         self.queue.done.connect(self._job_done)
+        self.queue.changed.connect(self._sync_stop_buttons)
+        for k in ("image", "video"):
+            self.pages[k].bar.stop_current.connect(self.stop_current)
         self._joined.connect(self._join_done)
         self._shredded.connect(self._shred_done)
         self._moved.connect(self._moved_done)
@@ -385,6 +388,23 @@ class Window(QMainWindow):
                 self._quit()
 
     # ---------------------------------------------------------------- results
+    def stop_current(self):
+        """Only the picture / video being made right now stops; everything else in the queue goes on."""
+        j = self.queue.running()
+        if j is None:
+            return
+        i = next((k for k, it in enumerate(j.get("items") or []) if it.get("status") == "running"), None)
+        if i is None:
+            return
+        self.queue.stop_item(j["id"], i)
+        self.toast("Stopping this one - the queue goes on.", "info")
+
+    def _sync_stop_buttons(self, *_):
+        j = self.queue.running()
+        for k in ("image", "video"):
+            self.pages[k].bar.set_running(j is not None and j.get("kind") == k,
+                                          "picture" if k == "image" else "video")
+
     def _job_done(self, jid):
         self._prune_memory()
         j = self.queue.job(jid)

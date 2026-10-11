@@ -793,10 +793,23 @@ class UserPresets(QWidget):
 
 # ------------------------------------------------------------------------------------------------ generate bar
 
+class _Count(QSpinBox):
+    """The number without the spin buttons (the arrows are beside it): its text uses the whole width."""
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.lineEdit().setGeometry(0, 0, self.width(), self.height())
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.lineEdit().setGeometry(0, 0, self.width(), self.height())
+
+
 class GenerateBar(QWidget):
     """Sticky at the bottom of the settings: how many, Generate, and what it will be / how long it takes."""
     generate = Signal(int)
     private_changed = Signal(bool)
+    stop_current = Signal()
 
     def __init__(self, noun="image", more=None):
         super().__init__()
@@ -806,12 +819,16 @@ class GenerateBar(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 12, 18, 14)
         v.setSpacing(8)
-        self.count = QSpinBox()
-        self.count.setRange(1, 100)
-        self.count.setFixedWidth(64)
+        self.count = _Count()
+        self.count.setRange(1, 128)
+        self.count.setFixedWidth(40)
+        self.count.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)       # the arrows are beside it
         self.count.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.count.setToolTip(f"How many {noun}s (each with its own seed)")
-        self.count.setPrefix("× ")
+        self.count.setToolTip(f"How many {noun}s (each with its own seed). Type a number or use the arrows.")
+        self.count_less = icon_button("back", lambda: self._step_count(-1), "Half as many (8 → 4 → 2 → 1)", size=14)
+        self.count_more = icon_button("arrow", lambda: self._step_count(1), "Twice as many (1 → 2 → 4 → 8)", size=14)
+        for b in (self.count_less, self.count_more):
+            b.setFixedSize(26, 42)
         self.btn = QPushButton("  Generate")
         self.btn.setObjectName("Accent")
         self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -823,8 +840,31 @@ class GenerateBar(QWidget):
         self.btn.clicked.connect(lambda: self.generate.emit(int(self.count.value())))
         h = QHBoxLayout()
         h.setSpacing(8)
-        h.addWidget(self.count)
+        counter = QWidget()
+        counter.setObjectName("Counter")
+        counter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        counter.setStyleSheet(f"#Counter {{ background: {T.FIELD}; border: 1px solid {T.BORDER}; border-radius: 11px; }}"
+                              "#Counter QSpinBox { background: transparent; border: none; font-weight: 600; "
+                              "padding: 0px; margin: 0px; min-height: 38px; }")
+        ch = QHBoxLayout(counter)
+        ch.setContentsMargins(2, 0, 2, 0)
+        ch.setSpacing(0)
+        ch.addWidget(self.count_less)
+        ch.addWidget(self.count)
+        ch.addWidget(self.count_more)
+        h.addWidget(counter)
         h.addWidget(self.btn, 1)
+        self.stop_btn = QPushButton()
+        self.stop_btn.setObjectName("Icon")
+        self.stop_btn.setFixedSize(42, 42)
+        self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_btn.setIcon(icons.icon("stop", "#FF8A8A", 18))
+        self.stop_btn.setToolTip("Stop the picture being made now - the rest of the queue goes on")
+        self.stop_btn.setStyleSheet("QPushButton#Icon { border: 1px solid #5A2A2A; border-radius: 11px; }"
+                                    f"QPushButton#Icon:hover {{ background: {T.SURFACE3}; }}")
+        self.stop_btn.clicked.connect(self.stop_current.emit)
+        self.stop_btn.hide()
+        h.addWidget(self.stop_btn)
         self.lock = QPushButton()
         self.lock.setObjectName("Icon")
         self.lock.setCheckable(True)
@@ -853,6 +893,23 @@ class GenerateBar(QWidget):
         self.info = label("", "Faint")
         self.info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(self.info)
+
+    def _step_count(self, d):
+        """The next power of two up or down: 1, 2, 4, 8 … (from 3: up to 4, down to 2)."""
+        v = int(self.count.value())
+        if d > 0:
+            n = 1
+            while n <= v:
+                n *= 2
+        else:
+            n = 1
+            while n * 2 < v:
+                n *= 2
+        self.count.setValue(max(1, min(self.count.maximum(), n)))
+
+    def set_running(self, on, what="picture"):
+        self.stop_btn.setVisible(bool(on))
+        self.stop_btn.setToolTip(f"Stop the {what} being made now - the rest of the queue goes on")
 
     def _private(self, on, emit=True):
         acc = T.accent().name()

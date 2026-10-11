@@ -41,6 +41,11 @@ class LorasPage(QWidget):
         self.filter.currentIndexChanged.connect(lambda _=0: self.fill())
         self.tagf = Combo()
         self.tagf.currentIndexChanged.connect(lambda _=0: self.fill())
+        self.sort = Combo()
+        for k, t in (("name", "Sort: name"), ("big", "Sort: biggest first"), ("small", "Sort: smallest first"),
+                     ("new", "Sort: newest first")):
+            self.sort.addItem(t, k)
+        self.sort.currentIndexChanged.connect(lambda _=0: self.fill())
         self._fill_tag_filter()
         self.fav = ToggleRow("Favourites", None, False, lambda _v: self.fill())
         self.fav.setFixedWidth(128)
@@ -49,7 +54,7 @@ class LorasPage(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _t: self.fill())
         self.count = label("", "Faint")
-        lv.addWidget(hrow(self.filter, self.tagf, self.search, self.fav, self.count,
+        lv.addWidget(hrow(self.filter, self.tagf, self.sort, self.search, self.fav, self.count,
                           icon_button("folder", self._open_folder, "Open ComfyUI's loras folder", size=16),
                           icon_button("refresh", self.link.refresh_models, "Look for new LoRA files", size=16),
                           icon_button("download", self._fetch_all, "Fetch all: trigger words and covers for every LoRA "
@@ -146,7 +151,11 @@ class LorasPage(QWidget):
         self.fetch_btn = button("Fetch", self._fetch, "Ghost", "download",
                                 "Trigger words, the first picture as the cover and what it was made for, from its "
                                 "Civitai link")
-        self.det.add(hrow(self.fetch_btn, button("Show the file", self._reveal, "Ghost", "folder"), None, spacing=6))
+        self.del_btn = button("Delete…", self._delete, "Ghost", "trash", "Delete the LoRA file from the drive (the way "
+                                                                           "Settings, Deleting says) and from this list",
+                              icon_color="#FF8A8A")
+        self.det.add(hrow(self.fetch_btn, button("Show the file", self._reveal, "Ghost", "folder"), None, self.del_btn,
+                          spacing=6))
         self.det.end()
         h.addWidget(side)
         self._icons = {}
@@ -201,7 +210,7 @@ class LorasPage(QWidget):
     def _icon(self, n):
         prev = loras.preview_for(self.link.install(), n)
         half = self._half(n)[0]
-        key = (n, prev, half, bool(loras.notes(n).get("favorite")), self._hidden(n))
+        key = (n, prev, half, bool(loras.notes(n).get("favorite")), tuple(loras.lora_tags(n)), self._hidden(n))
         if key not in self._icons:
             s = 300
             out = QPixmap(s, s)
@@ -236,6 +245,26 @@ class LorasPage(QWidget):
                 p.drawText(QRectF(14, 14, tw, 40), Qt.AlignmentFlag.AlignCenter, txt)
             if loras.notes(n).get("favorite"):
                 p.drawPixmap(s - 52, 14, icons.pixmap("starf", 36, "#F5B041", dpr=1.0))
+            tags_ = loras.lora_tags(n)
+            if tags_:
+                # the LoRA's tags as small labels along the bottom (like HIGH / LOW at the top)
+                f = p.font()
+                f.setPixelSize(19)
+                f.setBold(True)
+                p.setFont(f)
+                x, y = 14, s - 48
+                for t in tags_[:4]:
+                    txt = t.upper() if len(t) <= 10 else t[:9].upper() + "…"
+                    tw = p.fontMetrics().horizontalAdvance(txt) + 22
+                    if x + tw > s - 10:
+                        break
+                    nsfw = t.lower() == "nsfw"
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(QColor("#C0392B") if nsfw else QColor(0, 0, 0, 170))
+                    p.drawRoundedRect(QRectF(x, y, tw, 34), 10, 10)
+                    p.setPen(QColor("#FFFFFF"))
+                    p.drawText(QRectF(x, y, tw, 34), Qt.AlignmentFlag.AlignCenter, txt)
+                    x += tw + 6
             p.end()
             out.setDevicePixelRatio(2.0)
             self._icons[key] = QIcon(out)
@@ -261,16 +290,21 @@ class LorasPage(QWidget):
                 continue
             if q and q not in n.lower() and q not in nt.get("triggers", "").lower() and q not in nt.get("note", "").lower():
                 continue
-            rows.append((not nt.get("favorite"), n.lower(), n, f))
+            info = self._info(n)
+            how = self.sort.currentData()
+            key = {"big": -int(info.get("size") or 0), "small": int(info.get("size") or 0),
+                   "new": -self._mtime(n)}.get(how, 0)
+            rows.append((not nt.get("favorite"), key, n.lower(), n, f))
         keep = self.cur
         self.grid.blockSignals(True)
         self.grid.clear()
-        for _, _, n, f in sorted(rows):
+        for _, _, _, n, f in sorted(rows):
             it = QListWidgetItem(self._icon(n), nice_name(n))
             it.setData(Qt.ItemDataRole.UserRole, n)
             it.setData(BLUR_ROLE, self._hidden(n))
             half, part = self._half(n)
-            tip = "" if self._hidden(n) else f"{n}\n{loras.made_for_label(n, self._info(n))}"
+            tip = "" if self._hidden(n) else (f"{n}\n{loras.made_for_label(n, self._info(n))}  ·  "
+                                               f"{self._info(n).get('size', 0) / 2 ** 20:.0f} MB")
             if half:
                 tip += f"  ·  {half.capitalize()} noise" + (f"\nPair: {part}" if part else "  (its other half is missing)")
             it.setToolTip(tip)
@@ -396,10 +430,10 @@ class LorasPage(QWidget):
         if not self.cur:
             return
         v = self.made.currentData() or None
-        loras.set_note(self.cur, made_for=v)
+        loras.set_note(self.cur, made_for=v, made_for_src=None)     # set by hand: Fetch leaves it alone
         part = self._half(self.cur)[1]
         if part:
-            loras.set_note(part, made_for=v)
+            loras.set_note(part, made_for=v, made_for_src=None)
         self.fam_badge.setText(loras.made_for_label(self.cur, self._info(self.cur)))
 
     def _reveal_toggle(self):
@@ -470,12 +504,14 @@ class LorasPage(QWidget):
             os.path.normcase(civitai.COVERS))
         if res["cover"] and not own_cover:
             fields["preview"] = res["cover"]           # a cover you set yourself stays
-        if res["made_for"] and not nt.get("made_for"):
-            # only when it fits what the file itself is (a link without a version may point at another base)
+        if res["made_for"] and (not nt.get("made_for") or nt.get("made_for_src") == "fetch"):
+            # Civitai's base model when it is certainly this file's version (in the link, or the same checksum);
+            # a guess only when it fits what the file itself is. One you set by hand always stays.
             fam = self._info(n).get("family", "other")
             fits = {"sdxl": ("illustrious", "pony", "sdxl")}.get(fam, (fam,))
-            if fam == "other" or res["made_for"] in fits:
+            if res.get("exact") or fam == "other" or res["made_for"] in fits:
                 fields["made_for"] = res["made_for"]
+                fields["made_for_src"] = "fetch"
         loras.set_note(n, **fields)
         part = self._half(n)[1]
         if part:
@@ -497,7 +533,7 @@ class LorasPage(QWidget):
 
     def _enable(self, on):
         for w in (self.star, self.prev, self.trig, self.note, self.strength, self.add_img, self.add_vid, self.url,
-                  self.url_open, self.url_copy, self.made, self.tag_new, self.tagbox):
+                  self.url_open, self.url_copy, self.made, self.tag_new, self.tagbox, self.del_btn):
             w.setEnabled(on and (w not in (self.add_img, self.add_vid) or w.isEnabled()))
 
     def _save(self, key, value):
@@ -556,6 +592,45 @@ class LorasPage(QWidget):
         ins = self.link.install()
         if ins:
             system.open_folder(comfy.sub_dir(ins, "models/loras"))
+
+    def _mtime(self, n):
+        p = comfy.model_path(self.link.install(), "loras", n)
+        try:
+            return os.path.getmtime(p) if p else 0
+        except OSError:
+            return 0
+
+    def _delete(self):
+        """The LoRA file away (Recycle Bin, shredded or Eraser, as Settings say), with its notes and fetched cover."""
+        from PySide6.QtWidgets import QMessageBox
+        from . import civitai, shred
+        from .config import cfg as _cfg
+        n = self.cur
+        p = comfy.model_path(self.link.install(), "loras", n) if n else None
+        if not p:
+            return
+        mode = _cfg.get("delete_mode", "recycle")
+        how = {"recycle": "to the Recycle Bin", "shred": "shredded (can't be brought back)",
+               "eraser": "erased with Eraser (can't be brought back)"}.get(mode, "deleted")
+        part = self._half(n)[1]
+        extra = f"\n\nIts other half ({nice_name(part)}) stays - delete it on its own." if part else ""
+        if QMessageBox.question(self, "Delete LoRA", f"Delete {nice_name(n)} ({os.path.getsize(p) / 2 ** 20:.0f} MB) "
+                                                     f"from the drive? It goes {how}.{extra}") != \
+                QMessageBox.StandardButton.Yes:
+            return
+        files = [p]
+        cov = loras.notes(n).get("preview") or ""
+        if cov and os.path.normcase(cov).startswith(os.path.normcase(civitai.COVERS)):
+            files.append(cov)
+        left = shred.delete(files, mode)
+        if p in left:
+            QMessageBox.warning(self, "Delete LoRA", "The file could not be deleted (in use by ComfyUI?).")
+            return
+        loras.forget(n)
+        self.cur = None
+        self._icons = {k: v for k, v in self._icons.items() if k[0] != n}
+        self.link.refresh_models()
+        self.app.toast(f"{nice_name(n)} deleted.", "ok")
 
     def _reveal(self):
         p = comfy.model_path(self.link.install(), "loras", self.cur) if self.cur else None

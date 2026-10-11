@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLa
                                QMenu, QMessageBox, QPlainTextEdit, QVBoxLayout, QWidget)
 
 from . import icons, theme as T
+from .config import cfg
 from .vault import vault
 from .components import _Loader
 from .widgets import (ChipBox, Combo, FileList, Player, Segmented, anims_on, button, chip, hrow, icon_button, label,
@@ -331,10 +332,11 @@ class GalleryPage(QWidget):
     def _fill_nav(self):
         cur = self.place
         items = self.history.items
-        counts = {"all": len(items), "fav": sum(1 for e in items if e.get("fav")),
+        loose = [e for e in items if not self._filed(e)]
+        counts = {"all": len(loose), "fav": sum(1 for e in items if e.get("fav")),
                   "marked": sum(1 for e in items if e.get("marked")),
-                  "image": sum(1 for e in items if e.get("kind") == "image"),
-                  "video": sum(1 for e in items if e.get("kind") == "video")}
+                  "image": sum(1 for e in loose if e.get("kind") == "image"),
+                  "video": sum(1 for e in loose if e.get("kind") == "video")}
         self.nav.blockSignals(True)
         self.nav.clear()
 
@@ -357,7 +359,8 @@ class GalleryPage(QWidget):
             if key == cur:
                 self.nav.setCurrentItem(it)
         head("Private")
-        vt = (f"Vault   {len(vault.entries)}" if vault.is_open() else "Vault   locked") if vault.exists() else "Vault"
+        vt = (f"Vault   {sum(1 for e in vault.entries if not self._filed(e))}" if vault.is_open() else
+              "Vault   locked") if vault.exists() else "Vault"
         it = QListWidgetItem(icons.icon("lock", T.accent().name(), 16), vt)
         it.setData(Qt.ItemDataRole.UserRole, "vault")
         it.setToolTip("Encrypted pictures and videos, only shown here after you unlock it")
@@ -476,20 +479,29 @@ class GalleryPage(QWidget):
         else:
             self._dirty = True
 
+    def _filed(self, e):
+        """In a collection you filled yourself: then it leaves the general lists (Settings, App)."""
+        if e.get("vault"):
+            return bool(e.get("cols")) and cfg.get("vault_collections_leave", True)
+        if not cfg.get("collections_leave", True):
+            return False
+        manual = {c["id"] for c in self.history.collections if not c.get("smart")}
+        return any(c in manual for c in e.get("cols") or [])
+
     def _in_place(self, e):
         p = self.place
         if p == "vault":
-            return bool(e.get("vault"))
+            return bool(e.get("vault")) and not self._filed(e)
         if p.startswith("vcol:"):
             return bool(e.get("vault")) and p[5:] in (e.get("cols") or [])
         if p in ("fav", "marked"):
             return bool(e.get(p))
         if p in ("image", "video"):
-            return e.get("kind") == p
+            return e.get("kind") == p and not self._filed(e)
         if p.startswith("col:"):
             c = self.history.collection(p[4:])
             return bool(c) and self._in_col(e, c)
-        return True
+        return not self._filed(e)
 
     def _go(self, key):
         if not key:

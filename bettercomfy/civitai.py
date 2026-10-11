@@ -79,20 +79,21 @@ def _sha256(path):
 
 
 def version_for(host, mid, vid, local_file=None):
-    """The model version: the one in the link, else the one whose file is this LoRA, else the newest."""
+    """(version, exact): the one in the link, else the one whose file is this LoRA (both exact), else the newest
+    (a guess: a model page can hold versions for different base models, each with its own file)."""
     if vid:
-        return _json(f"https://{host}/api/v1/model-versions/{vid}")
+        return _json(f"https://{host}/api/v1/model-versions/{vid}"), True
     model = _json(f"https://{host}/api/v1/models/{mid}")
     versions = model.get("modelVersions") or []
     if not versions:
         raise FetchError("That model has no versions on Civitai.")
-    if local_file and os.path.isfile(local_file) and len(versions) > 1:
+    if local_file and os.path.isfile(local_file):
         mine = _sha256(local_file)
         for v in versions:
             for f in v.get("files") or []:
                 if str((f.get("hashes") or {}).get("SHA256", "")).upper() == mine:
-                    return v
-    return versions[0]
+                    return v, True
+    return versions[0], len(versions) == 1
 
 
 def made_for(base_model):
@@ -140,7 +141,7 @@ def fetch(name, url, local_file=None):
     if not link:
         raise FetchError("The link is not a Civitai model page (civitai.com / .red / .green).")
     host, mid, vid = link
-    v = version_for(host, mid, vid, local_file)
+    v, exact = version_for(host, mid, vid, local_file)
     words = []
     for w in v.get("trainedWords") or []:
         for part in str(w).split(","):
@@ -148,4 +149,4 @@ def fetch(name, url, local_file=None):
             if part and part not in words:
                 words.append(part)
     return {"triggers": words, "cover": save_cover(v, name), "made_for": made_for(v.get("baseModel")),
-            "version": v.get("name") or ""}
+            "base": v.get("baseModel") or "", "version": v.get("name") or "", "exact": exact}
