@@ -6,7 +6,7 @@ import sys
 
 APP_NAME = "Better Comfy"
 APP_ID = "BetterComfy"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 REPO = "slashneck/BetterComfy"
 REPO_URL = "https://github.com/" + REPO
 

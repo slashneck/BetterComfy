@@ -46,9 +46,19 @@ strength or model), side by side.
 **A LoRA library.** Every LoRA in your ComfyUI with what it was made for (Illustrious, Pony or plain SDXL told apart
 from the training details, and settable by hand), its trigger words (suggested from the file), notes, the page you got
 it from, a favourite strength and a preview picture. Sort them with tags (character, art style, pose, detailer and your
-own), and blur the names and previews of NSFW ones if you like. With a Civitai link saved, Fetch fills in the trigger
-words, a small cover picture and what it was made for. WAN LoRAs that come as a high and a low file are paired
-up and share their trigger words. Click a trigger word to put it into the prompt.
+own), sort them by size or date, and blur the names and previews of NSFW ones if you like. With a Civitai link saved,
+Fetch fills in the trigger words, a small cover picture and what it was made for. WAN LoRAs that come as a high and a
+low file are paired up and share their trigger words. Click a trigger word to put it into the prompt, or delete a LoRA
+from the drive right there.
+
+**A model library.** Your checkpoints and diffusion models side by side, each marked as such, with what they are made
+for, tags, notes, a cover, the page you got them from and their size. Fetch, favourites, delete and Use on Image work
+like in the LoRA library.
+
+**A market.** Browse Civitai (civitai.red or civitai.com) for LoRAs and checkpoints inside the app: search, filter by
+what a model is made for, sort, keep favourites. Downloads go straight into the right ComfyUI folder, are checked
+against Civitai's checksum and arrive with their link, trigger words, cover and what they are made for. SFW only until
+you switch NSFW on. Some creators only allow downloads when logged in: for those, add your Civitai API key in Settings.
 
 **A queue.** Pictures and videos one after the other, with time estimates learned on your PC. Take single pictures out
 of a job, stop one while the rest goes on, and choose what happens when the queue is done: nothing, free the graphics
@@ -62,10 +72,13 @@ and keep pictures in collections (also smart ones that fill themselves by model 
 **A vault.** Pictures and videos that only open with your password, encrypted with Argon2id and AES-256-GCM and only
 ever decrypted in memory. Turn on Private next to Generate and the result goes straight into the vault, without a copy
 in your folders or in ComfyUI's. Move pictures in later, take them out again, or animate, upscale and edit them without
-them leaving the vault. A recovery key, auto lock, and a re-encrypt option when you change the password.
+them leaving the vault. Collections inside the vault, whose names are encrypted too and only show while it is open. A
+recovery key, auto lock, and a re-encrypt option when you change the password.
 
 **Deleting for good.** Deleted files can go to the Recycle Bin, be shredded (overwritten, renamed and then deleted) or be
-handed to Eraser if it is installed.
+handed to Eraser if it is installed. Deleting a picture also takes its prompt out of the prompt history and the queue
+list. Clean up in Settings shows what making pictures leaves behind (uploads and temporary files in ComfyUI, its job
+history, unused thumbnails, masks, logs) and removes it, and ComfyUI is tidied after every job.
 
 **A prompt helper.** Small language models that improve, extend, shorten or write prompts, as tags or as sentences
 depending on the model, and write motion for videos. Uncensored writing models (Qwen3.5 2B, 4B or 9B) and TIPO, a model
@@ -77,6 +90,7 @@ also get tag suggestions while you type, with a tag blacklist you can edit.
 the vault is open.
 
 **Little things.** Your own presets, live previews while a picture is drawn, prompt history, Ctrl+Enter to generate,
+a Stop button that slides out of Generate while something is made, count arrows that double and halve,
 Ctrl+Up and Down to weight a word, `{a|b|c}` to pick one per picture, accent colours and a tray icon.
 
 ## What you need
@@ -104,7 +118,7 @@ On the first start Better Comfy looks for ComfyUI. If it can't find it, pick the
 | --- | --- |
 | Pictures | `Pictures\Better Comfy` (changeable) |
 | Videos | `Videos\Better Comfy` (changeable) |
-| Settings, gallery, LoRA notes, the vault | `%LocalAppData%\BetterComfy` |
+| Settings, gallery, LoRA and model notes, covers, the vault | `%LocalAppData%\BetterComfy` |
 | Prompt helper (if set up) | the folder you pick |
 | The program | `%LocalAppData%\Programs\BetterComfy` |
 
@@ -116,9 +130,10 @@ gallery where they are.
 Everything you make stays on your PC. Better Comfy only talks to the ComfyUI on this computer, and a ComfyUI it starts
 itself only listens on this computer. There is no account, no telemetry and no upload. Better Comfy goes online to ask GitHub
 whether a new version exists (you can switch that off under Settings, Updates) and, only when you ask for it, to
-download prompt helper models or missing model parts once from Hugging Face and GitHub, and to read a LoRA's Civitai
-page when you press Fetch. The prompt helper itself runs on
-your PC.
+download prompt helper models or missing model parts once from Hugging Face and GitHub, to read a model's Civitai page
+when you press Fetch, and to talk to Civitai while the Market is open. Covers you see in the Market stay in memory and
+are never saved. A Civitai API key, if you add one, is kept encrypted for your Windows account and only sent to Civitai
+with downloads. The prompt helper itself runs on your PC.
 
 ## Building
 
