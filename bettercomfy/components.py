@@ -3,7 +3,7 @@ the seed control, the Generate bar and the result pane (player + filmstrip + act
 import re
 import threading
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QImage, QPixmap, QTextCursor
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMenu,
                                QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget)
@@ -853,7 +853,13 @@ class GenerateBar(QWidget):
         ch.addWidget(self.count)
         ch.addWidget(self.count_more)
         h.addWidget(counter)
-        h.addWidget(self.btn, 1)
+        # Generate and the stop slot are one group: the slot (with its own gap) grows out of Generate's right edge
+        gen_group = QWidget()
+        gl = QHBoxLayout(gen_group)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setSpacing(0)
+        gl.addWidget(self.btn, 1)
+        h.addWidget(gen_group, 1)
         self.stop_btn = QPushButton()
         self.stop_btn.setObjectName("Icon")
         self.stop_btn.setFixedSize(42, 42)
@@ -863,8 +869,16 @@ class GenerateBar(QWidget):
         self.stop_btn.setStyleSheet("QPushButton#Icon { border: 1px solid #5A2A2A; border-radius: 11px; }"
                                     f"QPushButton#Icon:hover {{ background: {T.SURFACE3}; }}")
         self.stop_btn.clicked.connect(self.stop_current.emit)
-        self.stop_btn.hide()
-        h.addWidget(self.stop_btn)
+        # the stop button lives in a slot that grows out of Generate's right edge while something is being made
+        self.stop_slot = QWidget()
+        sl = QHBoxLayout(self.stop_slot)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.addStretch(1)
+        sl.addWidget(self.stop_btn)
+        self.stop_slot.setFixedWidth(0)
+        self._slot_w = 0.0
+        self._slot_anim = None
+        gl.addWidget(self.stop_slot)
         self.lock = QPushButton()
         self.lock.setObjectName("Icon")
         self.lock.setCheckable(True)
@@ -908,8 +922,28 @@ class GenerateBar(QWidget):
         self.count.setValue(max(1, min(self.count.maximum(), n)))
 
     def set_running(self, on, what="picture"):
-        self.stop_btn.setVisible(bool(on))
+        """Generate splits: the stop button slides out of it (and back in when nothing is being made)."""
         self.stop_btn.setToolTip(f"Stop the {what} being made now - the rest of the queue goes on")
+        target = 50.0 if on else 0.0                    # the button (42) and the gap to Generate (8)
+        if abs(self._slot_w - target) < 0.5 and (self._slot_anim is None or
+                                                  self._slot_anim.state() != QVariantAnimation.State.Running):
+            return
+        if self._slot_anim is not None:
+            self._slot_anim.stop()
+        from .widgets import anims_on
+        if not anims_on() or not self.isVisible():
+            self._set_slot(target)
+            return
+        a = QVariantAnimation(self, startValue=self._slot_w, endValue=target, duration=320,
+                              easingCurve=QEasingCurve.Type.OutBack if on else QEasingCurve.Type.InOutCubic)
+        a.valueChanged.connect(lambda v: self._set_slot(float(v)))
+        a.start()
+        self._slot_anim = a
+
+    def _set_slot(self, w):
+        self._slot_w = w
+        self.stop_slot.setFixedWidth(max(0, int(round(w))))
+        self.stop_btn.setVisible(w > 4)
 
     def _private(self, on, emit=True):
         acc = T.accent().name()
