@@ -54,6 +54,8 @@ _P = {
     "wand": '<path d="M4 20L14.5 9.5M13 6.5l4.5 4.5"/><path d="M17 3v3M15.5 4.5h3M20 8v2M19 9h2" stroke-width="1.5"/>',
     "edit": '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     "tag": '<path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8.5" cy="8.5" r="1.5"/>',
+    "usb": '<rect x="6.5" y="9" width="11" height="12.5" rx="2.5"/><path d="M8.5 9V3h7v6"/>'
+           '<path d="M10.5 5.6v.8M13.5 5.6v.8"/>',
     "monitor": '<rect x="3" y="4" width="18" height="12" rx="2.5"/><path d="M8 20h8M12 16v4"/>',
     "palette": '<path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-1.4-1-1.8-1-3 0-1.1.9-2 2-2h2a4 4 0 0 0 4-4c0-4-4-7-9-7z"/>'
                '<circle cx="7.5" cy="11" r="1.2" fill="currentColor"/><circle cx="10" cy="7" r="1.2" fill="currentColor"/>'

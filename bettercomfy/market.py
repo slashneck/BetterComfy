@@ -69,7 +69,10 @@ class _Thumbs(QObject):
                     img.loadFromData(data)
             except Exception:
                 pass
-            self._arrived.got.emit(url, img)
+            try:
+                self._arrived.got.emit(url, img)
+            except RuntimeError:                        # the window closed meanwhile
+                return
 
     def _store(self, url, img):
         self.pending.discard(url)

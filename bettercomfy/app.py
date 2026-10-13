@@ -132,6 +132,10 @@ class Window(QMainWindow):
     _joined = Signal(dict)
     _shredded = Signal(int, int)
     _moved = Signal(list, int)
+    _stored = Signal(int, int, str)             # moved to / from a drive: how many, how many not, the message
+    _plain_moved = Signal(str, dict, list)      # entry id, its new fields, the old files to remove
+    _imported = Signal(object)                  # a gallery entry made from an imported file
+    _import_done = Signal(int, int, str)
 
     def __init__(self):
         super().__init__()
@@ -139,6 +143,9 @@ class Window(QMainWindow):
         self.setWindowIcon(QIcon(resource("assets", "icon.ico")))
         self.history = History()
         self.history.compact()
+        from . import stores
+        stores.watcher.start()
+        self.history.refresh_stores()
         self.link = Link()
         self.queue = Queue(self.link, self.history)
         from .update_service import UpdateService
@@ -204,6 +211,11 @@ class Window(QMainWindow):
         self._restore()
         self.go(cfg.get("start_page") or "image", animate=False)
         self.link.begin()
+        stores.watcher.changed.connect(self._stores_changed)
+        self._stored.connect(self._stored_done)
+        self._plain_moved.connect(self._plain_moved_done)
+        self._imported.connect(self.history.add)
+        self._import_done.connect(self._import_finished)
         self.updates.changed.connect(self._update_state)
         self.updates.begin()
         self._queue()
@@ -549,7 +561,9 @@ class Window(QMainWindow):
                                               "created", "took", "op", "fav") if k in e}
                     meta.update(name=os.path.splitext(os.path.basename(e["file"]))[0],
                                 fmt=os.path.splitext(e["file"])[1].lstrip(".").lower() or "png")
-                    vault.add_file(e["file"], meta, thumb)
+                    from . import stores
+                    on = e.get("store") if e.get("store") and stores.root(e["store"]) else None
+                    vault.add_file(e["file"], meta, thumb, store=on)      # a picture on a drive stays on it
                     done.append(e)
                     plain += [e["file"], e.get("thumb"), e["file"] + ".json"]
                 except Exception:
@@ -608,6 +622,9 @@ class Window(QMainWindow):
         entries = [e for e in entries if e and e.get("vault")]
         if not entries or not vault.is_open():
             return
+        entries = self._spare_favs(entries)
+        if not entries:
+            return
         n = len(entries)
         if QMessageBox.question(self, "Vault", f"Delete {'this' if n == 1 else f'these {n}'} from the vault for "
                                                "good?") != QMessageBox.StandardButton.Yes:
@@ -623,6 +640,12 @@ class Window(QMainWindow):
         """Things to do with something in the vault - everything made from it stays private too."""
         from . import jobs
         ref = "vault:" + e["id"]
+        if key == "folder":
+            try:
+                system.reveal(vault.file_of(e))
+            except Exception:
+                self.toast("Its drive is not plugged in.", "warn")
+            return
         if key == "view":
             items = vault.recent()
             ids = [x["id"] for x in items]
@@ -818,10 +841,20 @@ class Window(QMainWindow):
         if pics:
             self.pages["video"].batch(pics)
 
+    def _spare_favs(self, entries):
+        """Favourites are never deleted: they are left out (with a word about it)."""
+        favs = [e for e in entries if e.get("fav")]
+        if favs:
+            rest = len(entries) - len(favs)
+            self.toast(f"{len(favs)} favourite{'s' if len(favs) != 1 else ''} left alone"
+                       + (" - take the star off to delete." if not rest else "."), "info")
+        return [e for e in entries if not e.get("fav")]
+
     def delete_entries(self, entries, ask=True):
         """Pictures and videos away for good: to the Recycle Bin, or shredded (Settings, Deleting). Their thumbnails and
-        settings files go the same way; with shredding their gallery lines are rewritten out of the gallery file too."""
-        entries = [e for e in entries if e]
+        settings files go the same way; with shredding their gallery lines are rewritten out of the gallery file too.
+        Favourites stay."""
+        entries = self._spare_favs([e for e in entries if e])
         if not entries:
             return
         from . import shred
@@ -834,6 +867,8 @@ class Window(QMainWindow):
             q = {"recycle": f"Move {what} to the Recycle Bin?",
                  "shred": f"Shred {what}? They are overwritten and can't be brought back.",
                  "eraser": f"Erase {what} with Eraser? They can't be brought back."}[mode]
+            if mode == "recycle" and any(e.get("store") for e in entries):
+                q += "\n\nA USB stick or other drive has no Recycle Bin: what is on one is deleted for good."
             if QMessageBox.question(self, "Delete", q) != QMessageBox.StandardButton.Yes:
                 return
         files, caches = [], []
@@ -872,6 +907,250 @@ class Window(QMainWindow):
             self._shredded.emit(n, len([f for f in left if f in files]))
         threading.Thread(target=work, daemon=True).start()
 
+    # ---- drives (Settings, Drives)
+    def _stores_changed(self):
+        """A drive was plugged in or out: what is on it shows or hides (vault files only while the vault is open)."""
+        self.history.refresh_stores()
+        if vault.is_open() and vault.refresh_stores():
+            self.pages["gallery"].vault_changed()
+        self.pages["gallery"].drives_changed()
+        sp = self.pages.get("settings")
+        if sp is not None and hasattr(sp, "drives_changed"):
+            sp.drives_changed()
+
+    def move_to_store(self, entries, sid):
+        """Pictures and videos (vault ones too) onto a drive, or back to this PC (sid None). Copied, checked byte for
+        byte, then the old copy goes (shredded when Settings say so, and always for vault files)."""
+        from . import stores
+        entries = [e for e in entries if e and (e.get("store") or None) != (sid or None)]
+        if not entries:
+            return
+        if sid and not stores.root(sid):
+            self.toast("That drive is not plugged in.", "warn")
+            return
+        if any(e.get("store") and not stores.root(e["store"]) for e in entries):
+            self.toast("Some of them are on a drive that is not plugged in.", "warn")
+            return
+        locked = [e for e in entries if e.get("vault")]
+        if locked and not vault.is_open():
+            return
+        plain = [e for e in entries if not e.get("vault")]
+        where = stores.label(stores.get(sid)) if sid else "this PC"
+
+        def size_of(e):
+            if e.get("vault"):
+                return int(e.get("size") or 0) + int(e.get("thumb_len") or 0)
+            try:
+                return os.path.getsize(e["file"])
+            except OSError:
+                return 0
+        need = sum(size_of(e) for e in entries)
+        room = stores.free(sid) if sid else self._pc_free()
+        if need > room - (64 << 20):
+            self.toast(f"Not enough room on {where}: {need / 2 ** 30:.1f} GB needed, {room / 2 ** 30:.1f} GB free.",
+                       "warn")
+            return
+        fat = bool(sid) and stores.file_system(sid).upper().startswith("FAT")
+        n = len(entries)
+        self.toast(f"Moving {n} to {where}…", "info")
+
+        def work():
+            ok = bad = big = 0
+            for e in plain:
+                try:
+                    if fat and size_of(e) >= 4 << 30:
+                        big += 1
+                        continue
+                    fields, olds = self._copy_plain(e, sid)
+                    self._plain_moved.emit(e["id"], fields, olds)
+                    ok += 1
+                except Exception:
+                    bad += 1
+            if locked:
+                try:
+                    m = vault.move([e for e in locked if not (fat and size_of(e) >= 4 << 30)], sid)
+                except Exception:
+                    m = 0
+                ok += m
+                bad += len(locked) - m
+            msg = f"{ok} moved to {where}."
+            if big:
+                msg += f" {big} bigger than 4 GB stayed: this drive (FAT32) can't hold them."
+            if bad:
+                msg += f" {bad} couldn't be moved."
+            self._stored.emit(ok, bad + big, msg)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _pc_free(self):
+        import shutil
+        from .jobs import _out_dir
+        try:
+            return shutil.disk_usage(_out_dir("image")).free
+        except OSError:
+            return 0
+
+    def _copy_plain(self, e, sid):
+        """Copies a gallery item (with its settings file and thumbnail) to a drive or back here. Returns its new
+        fields and the old files (removed once the gallery knows the new place)."""
+        import shutil
+        from . import stores
+        from .jobs import _out_dir
+        from .vault import _same
+        src = e["file"]
+        if sid:
+            r = stores.root(sid)
+            dst = media.unique(os.path.join(stores.pictures_dir(sid, e.get("kind", "image")), os.path.basename(src)))
+            tdir = stores.thumbs_dir(sid)
+        else:
+            r = None
+            dst = media.unique(os.path.join(_out_dir(e.get("kind", "image")), os.path.basename(src)))
+            tdir = os.path.join(BASE, "thumbs")
+        made = []
+        try:
+            shutil.copyfile(src, dst)
+            made.append(dst)
+            if not _same(src, dst):
+                raise OSError("The copy came out different")
+            olds = [src]
+            if os.path.isfile(src + ".json"):
+                shutil.copyfile(src + ".json", dst + ".json")
+                made.append(dst + ".json")
+                olds.append(src + ".json")
+            th = None
+            if e.get("thumb") and os.path.isfile(e["thumb"]):
+                os.makedirs(tdir, exist_ok=True)
+                th = media.unique(os.path.join(tdir, os.path.basename(e["thumb"])))
+                shutil.copyfile(e["thumb"], th)
+                made.append(th)
+                olds.append(e["thumb"])
+        except Exception:
+            for f in made:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+            raise
+        if sid:
+            fields = {"store": sid, "rel": os.path.relpath(dst, r),
+                      "thumb_rel": os.path.relpath(th, r) if th else None, "file": dst, "thumb": th}
+        else:
+            fields = {"store": None, "rel": None, "thumb_rel": None, "file": dst, "thumb": th}
+        return fields, olds
+
+    def _plain_moved_done(self, eid, fields, olds):
+        self.history.update(eid, **fields)
+        mode = cfg.get("delete_mode", "recycle")
+        mode = mode if mode in ("shred", "eraser") else "plain"
+        threading.Thread(target=lambda: _remove_files(olds, mode), daemon=True).start()
+        self.forget_pictures(olds[:1])
+
+    def _stored_done(self, ok, bad, msg):
+        self.history.refresh_stores()
+        g = self.pages["gallery"]
+        if vault.is_open():
+            vault.refresh_stores()
+        g.drives_changed()
+        sp = self.pages.get("settings")
+        if sp is not None and hasattr(sp, "drives_changed"):
+            sp.drives_changed()
+        self.toast(msg, "ok" if not bad else "warn")
+
+    # ---- bringing pictures in from elsewhere (another app, a folder)
+    IMPORT_EXT = {".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".bmp": "image",
+                  ".gif": "image", ".mp4": "video", ".webm": "video", ".mov": "video", ".mkv": "video"}
+
+    def import_files(self, paths, into_vault=False, sid=None, col=None):
+        """Pictures and videos from outside into the gallery (copied into your folders, or onto a drive) or
+        straight into the vault (encrypted; then the originals are best shredded). col: a collection to put them
+        in (a vault collection when into_vault)."""
+        from PySide6.QtWidgets import QCheckBox
+        files = []
+        for p in paths:
+            if os.path.isdir(p):
+                for root, _d, fs in os.walk(p):
+                    files += [os.path.join(root, f) for f in sorted(fs)]
+            else:
+                files.append(p)
+        files = [f for f in files if os.path.splitext(f)[1].lower() in self.IMPORT_EXT and os.path.isfile(f)]
+        if not files:
+            self.toast("No pictures or videos in there.", "warn")
+            return
+        if into_vault and not self.ensure_vault("Unlock the vault to put pictures into it."):
+            return
+        from . import stores
+        where = "the vault" if into_vault else (stores.label(stores.get(sid)) if sid else "your gallery")
+        box = QMessageBox(QMessageBox.Icon.Question, "Import",
+                          f"Bring {len(files)} picture{'s' if len(files) != 1 else ''} / video"
+                          f"{'s' if len(files) != 1 else ''} into {where}?", parent=self)
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        cb = QCheckBox("Then shred the originals" if into_vault else "Then delete the originals")
+        cb.setChecked(into_vault)
+        cb.setToolTip("Overwritten before they are deleted: nothing readable stays where they were" if into_vault
+                      else "The way Settings, Deleting says")
+        box.setCheckBox(cb)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
+        drop = cb.isChecked()
+        vsid = sid if into_vault else None
+        self.toast(f"Bringing in {len(files)}…", "info")
+
+        def work():
+            import shutil
+            import time as _t
+            from .jobs import _out_dir
+            ok, done_src = 0, []
+            for f in files:
+                try:
+                    kind = self.IMPORT_EXT[os.path.splitext(f)[1].lower()]
+                    meta = _import_meta(f, kind)
+                    thumb = meta.pop("_thumb", None)
+                    meta["created"] = _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(os.path.getmtime(f)))
+                    if into_vault:
+                        meta.update(name=os.path.splitext(os.path.basename(f))[0],
+                                    fmt=os.path.splitext(f)[1].lstrip(".").lower())
+                        e = vault.add_file(f, meta, thumb, store=vsid)
+                        if col:
+                            vault.set_in_collection([e["id"]], col, True)
+                    else:
+                        folder = stores.pictures_dir(sid, kind) if sid else _out_dir(kind)
+                        dst = media.unique(os.path.join(folder, os.path.basename(f)))
+                        shutil.copyfile(f, dst)
+                        tdir = stores.thumbs_dir(sid) if sid else os.path.join(BASE, "thumbs")
+                        th = None
+                        if thumb:
+                            os.makedirs(tdir, exist_ok=True)
+                            th = media.unique(os.path.join(tdir, os.path.splitext(os.path.basename(dst))[0] + ".jpg"))
+                            with open(th, "wb") as fh:
+                                fh.write(thumb)
+                        e = dict(meta, file=dst, thumb=th, op="import")
+                        if sid:
+                            r = stores.root(sid)
+                            e.update(store=sid, rel=os.path.relpath(dst, r),
+                                     thumb_rel=os.path.relpath(th, r) if th else None)
+                        if col:
+                            e["cols"] = [col]
+                        self._imported.emit(e)
+                    ok += 1
+                    done_src.append(f)
+                except Exception:
+                    pass
+            if drop and done_src:
+                mode = "shred" if into_vault else cfg.get("delete_mode", "recycle")
+                if mode == "eraser":
+                    mode = "shred"
+                _remove_files(done_src, mode if mode in ("shred", "recycle") else "plain")
+            bad = len(files) - ok
+            msg = f"{ok} brought into {where}." + (f" {bad} couldn't be read." if bad else "")
+            if drop and done_src:
+                msg += " The originals were shredded." if into_vault or mode == "shred" else " The originals were deleted."
+            self._import_done.emit(ok, bad, msg)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _import_finished(self, n, bad, msg):
+        if vault.is_open():
+            self.pages["gallery"].vault_changed()
+        self.toast(msg, "ok" if not bad else "warn")
+
     def forget_pictures(self, refs):
         """Pictures that are gone (deleted, moved into or out of the vault) leave the start / end picture slots too,
         so Generate never runs into a missing picture."""
@@ -896,7 +1175,12 @@ class Window(QMainWindow):
             return
         on = not all(e.get(key) for e in entries)
         for e in entries:
-            self.history.update(e["id"], **{key: on})
+            if not e.get("vault"):
+                self.history.update(e["id"], **{key: on})
+        locked = [e["id"] for e in entries if e.get("vault")]
+        if locked and vault.is_open():
+            vault.update_many(locked, **{key: on})
+            self.pages["gallery"].vault_flags(locked)
         return on
 
     def show_entry(self, eid):
@@ -1191,3 +1475,50 @@ def main():
                 win._quit()
         QTimer.singleShot(2500, shoot)
     return app.exec()
+
+
+def _remove_files(paths, mode):
+    """Old copies after a move or an import: shredded, to the Recycle Bin, or simply deleted."""
+    from . import shred
+    paths = [p for p in paths if p and os.path.exists(p)]
+    if mode in ("shred", "eraser", "recycle"):
+        shred.delete(paths, mode)
+        return
+    for p in paths:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+def _import_meta(path, kind):
+    """Size, a thumbnail and (from a PNG made by A1111, ComfyUI tools or Civitai) the prompt of a file."""
+    meta = {"kind": kind}
+    if kind == "image":
+        from PIL import Image
+        with Image.open(path) as im:
+            meta["w"], meta["h"] = im.size
+        with open(path, "rb") as fh:
+            meta["_thumb"] = media.thumbnail_bytes(fh.read())
+        if path.lower().endswith(".png"):
+            try:
+                txt = media.read_png_text(path).get("parameters")
+                if txt:
+                    p = media.parse_a1111(txt)
+                    for k in ("prompt", "negative", "seed"):
+                        if p.get(k):
+                            meta[k] = p[k]
+            except Exception:
+                pass
+    else:
+        frames, fps = media.read_video(path, max_h=160, limit=20000)
+        if not frames:
+            raise ValueError("no frames")
+        big, _f = media.read_video(path, max_h=480, limit=1)
+        first = big[0] if big else frames[0]
+        meta["h"], meta["w"] = first.shape[:2]
+        meta["_thumb"] = media.thumbnail_bytes(first)
+        meta["fps"] = fps
+        meta["frames"] = len(frames)
+        meta["seconds"] = round(len(frames) / fps, 1) if fps else ""
+    return meta

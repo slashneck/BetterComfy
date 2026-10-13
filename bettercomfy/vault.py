@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import secrets
+import shutil
 import struct
 import threading
 import time
@@ -224,6 +225,7 @@ class Vault:
         self._key = None
         self.entries = []
         self.collections = []           # [{"id", "name"}] - kept in the encrypted index like everything else
+        self.offline = []               # files on a drive that is not plugged in: kept in the index, not shown
         self._lock = threading.RLock()
         self.unlocked_at = 0.0
         self.parked = []                # results made while the vault was locked: only in memory until it opens
@@ -240,6 +242,7 @@ class Vault:
         with self._lock:
             self._key = None
             self.entries = []
+            self.offline = []
             self.collections = []
 
     def destroy(self):
@@ -317,14 +320,18 @@ class Vault:
         head["kdf"] = dict(KDF, salt=_b64(salt))
         head["key"] = _wrap(_kdf(new_password, salt), self._key, b"password")
         self._write_json(HEADER, head)
+        self._mirror()
 
     def _open(self, key):
         with self._lock:
             self._key = key
             self.entries = self._load_index()
+            self.offline = []
             self.collections = self._index_collections
             self.unlocked_at = time.time()
             parked, self.parked = self.parked, []
+        self.refresh_stores(save=False)
+        self._mirror()
         for data, meta, thumb in parked:
             self.add(data, meta, thumb)
 
@@ -354,10 +361,116 @@ class Vault:
         fix_times(path)
 
     def _save_index(self):
-        self._write_index(INDEX + ".tmp", self._key, self.entries)
+        self._write_index(INDEX + ".tmp", self._key, self.entries + self.offline)
         os.replace(INDEX + ".tmp", INDEX)
         fix_times(INDEX)
         fix_times(DIR)
+        self._mirror()
+
+    # ---- drives (Settings, Drives): vault files kept on a USB stick or another drive
+    def _folder(self, sid):
+        """Where the encrypted files of a place are: this PC (sid None) or a drive's .vault folder."""
+        if not sid:
+            return BLOBS
+        from . import stores
+        if not stores.root(sid):
+            raise VaultError("That drive is not plugged in")
+        return os.path.join(stores.vault_dir(sid), "files")
+
+    def _blob_path(self, entry, blob):
+        return os.path.join(self._folder(entry.get("store")), blob + ".bcv")
+
+    def refresh_stores(self, save=True):
+        """Drives plugged in or out: their vault files show or hide. Returns True when something changed."""
+        from . import stores
+        if not self.is_open():
+            return False
+        with self._lock:
+            show, hide = [], []
+            for e in self.entries + self.offline:
+                sid = e.get("store")
+                ok = not sid or (stores.root(sid) and os.path.isfile(os.path.join(stores.root(sid), ".vault", "files",
+                                                                                  e["blob"] + ".bcv")))
+                (show if ok else hide).append(e)
+            changed = {x["id"] for x in hide} != {x["id"] for x in self.offline}
+            show.sort(key=lambda e: e.get("added", ""))
+            self.entries, self.offline = show, hide
+        if changed:
+            self._mirror()
+        return changed
+
+    def _mirror(self):
+        """Each plugged-in drive with vault files keeps a copy of the (encrypted) header and of the list of what is
+        on it, so the drive on its own still holds everything needed with the password - as a backup."""
+        from . import stores
+        if not self.is_open() or not os.path.isfile(HEADER):
+            return
+        for s in stores.online():
+            mine = [e for e in self.entries if e.get("store") == s["id"]]
+            if not mine:
+                continue
+            try:
+                d = stores.vault_dir(s["id"])
+                with open(HEADER, "rb") as fh:
+                    head = fh.read()
+                hp = os.path.join(d, "vault.json")
+                old = open(hp, "rb").read() if os.path.isfile(hp) else None
+                if old != head:
+                    with open(hp + ".tmp", "wb") as fh:
+                        fh.write(head)
+                    os.replace(hp + ".tmp", hp)
+                    fix_times(hp)
+                ip = os.path.join(d, "index.bcv")
+                self._write_index(ip + ".tmp", self._key, mine)
+                os.replace(ip + ".tmp", ip)
+                fix_times(ip)
+            except (OSError, VaultError):
+                pass
+
+    def move(self, entries, sid, progress=None):
+        """Moves the encrypted files of entries to a drive (sid) or back to this PC (None). Nothing is decrypted:
+        the files are copied as they are, checked byte for byte, and the old ones shredded. Returns how many
+        moved."""
+        from . import shred
+        self._need()
+        dest = self._folder(sid)
+        os.makedirs(dest, exist_ok=True)
+        moved = 0
+        for i, e in enumerate(entries):
+            if (e.get("store") or None) == (sid or None):
+                continue
+            blobs = [b for b in (e.get("blob"), e.get("thumb_blob")) if b]
+            olds, news = [], []
+            try:
+                for b in blobs:
+                    src = self._blob_path(e, b)
+                    dst = os.path.join(dest, b + ".bcv")
+                    shutil.copyfile(src, dst + ".tmp")
+                    if not _same(src, dst + ".tmp"):
+                        raise VaultError("The copy came out different")
+                    os.replace(dst + ".tmp", dst)
+                    fix_times(dst)
+                    olds.append(src)
+                    news.append(dst)
+            except (OSError, VaultError):
+                for f in news + [os.path.join(dest, b + ".bcv.tmp") for b in blobs]:
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+                continue
+            with self._lock:
+                e["store"] = sid or None
+                if not sid:
+                    e.pop("store", None)
+                self._save_index()
+            for f in olds:
+                shred.shred_file(f)
+            moved += 1
+            if progress:
+                progress(i + 1, len(entries))
+        fix_times(dest)
+        return moved
 
     @staticmethod
     def _write_json(path, obj, final=None):
@@ -386,24 +499,25 @@ class Vault:
         if not self.is_open():
             raise VaultError("The vault is locked")
 
-    def _put_blob(self, chunks, size, key=None):
+    def _put_blob(self, chunks, size, key=None, folder=None):
         blob = uuid.uuid4().hex
-        os.makedirs(BLOBS, exist_ok=True)
-        path = os.path.join(BLOBS, blob + ".bcv")
+        folder = folder or BLOBS
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, blob + ".bcv")
         with open(path + ".tmp", "wb") as fh:
             encrypt_stream(key or self._key, blob, _padded(chunks, size), fh)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(path + ".tmp", path)
         fix_times(path)
-        fix_times(BLOBS)
+        fix_times(folder)
         return blob
 
     def add(self, data, meta, thumb=None):
         """Puts bytes (a picture or video) into the vault with its details. Returns the new entry."""
         return self._add(iter([data]), meta, thumb, len(data))
 
-    def add_file(self, path, meta, thumb=None):
+    def add_file(self, path, meta, thumb=None, store=None):
         def chunks():
             with open(path, "rb") as fh:
                 while True:
@@ -411,16 +525,19 @@ class Vault:
                     if not b:
                         return
                     yield b
-        return self._add(chunks(), meta, thumb, os.path.getsize(path))
+        return self._add(chunks(), meta, thumb, os.path.getsize(path), store)
 
-    def _add(self, chunks, meta, thumb, size):
+    def _add(self, chunks, meta, thumb, size, store=None):
         with self._lock:
             self._need()
+            folder = self._folder(store)
             e = dict(meta)
-            e.update(id=uuid.uuid4().hex[:12], vault=True, blob=self._put_blob(chunks, size), size=size,
+            e.update(id=uuid.uuid4().hex[:12], vault=True, blob=self._put_blob(chunks, size, folder=folder), size=size,
                      added=time.strftime("%Y-%m-%d %H:%M:%S"), pad=1)
+            if store:
+                e["store"] = store
             e.setdefault("created", e["added"])
-            e["thumb_blob"] = self._put_blob(iter([thumb]), len(thumb)) if thumb else None
+            e["thumb_blob"] = self._put_blob(iter([thumb]), len(thumb), folder=folder) if thumb else None
             e["thumb_len"] = len(thumb) if thumb else 0
             for k in ("file", "thumb"):
                 e.pop(k, None)          # no paths of the plain copy inside the vault
@@ -442,7 +559,7 @@ class Vault:
         blob = entry.get(which)
         if not blob:
             return None
-        with _reading(os.path.join(BLOBS, blob + ".bcv")) as fh:
+        with _reading(self._blob_path(entry, blob)) as fh:
             data = b"".join(decrypt_stream(key or self._key, blob, fh))
         n = self._real_len(entry, which)
         return data if n is None else data[:n]
@@ -452,7 +569,7 @@ class Vault:
         self._need()
         blob = entry["blob"]
         left = self._real_len(entry, "blob")
-        with _reading(os.path.join(BLOBS, blob + ".bcv")) as fh, open(dest + ".part", "wb") as out:
+        with _reading(self._blob_path(entry, blob)) as fh, open(dest + ".part", "wb") as out:
             for b in decrypt_stream(self._key, blob, fh):
                 if left is not None:
                     b = b[:left]
@@ -470,6 +587,11 @@ class Vault:
             raise VaultError("Use at least 8 characters")
         with self._lock:
             self._need()
+            if self.offline:
+                from . import stores
+                names = sorted({stores.label(stores.get(e.get("store")) or {"id": ""}, False) for e in self.offline})
+                raise VaultError(f"{len(self.offline)} vault files are on a drive that is not plugged in "
+                                 f"({', '.join(names)}). Plug it in first.")
             new_key = secrets.token_bytes(32)
             entries, made, old = [], [], []
             total = len(self.entries)
@@ -477,21 +599,22 @@ class Vault:
                 for i, e in enumerate(self.entries):
                     e2 = dict(e, pad=1)
                     data = self.read(e, "blob")
-                    e2["blob"] = self._put_blob(iter([data]), len(data), new_key)
-                    made.append(e2["blob"])
+                    folder = self._folder(e.get("store"))
+                    e2["blob"] = self._put_blob(iter([data]), len(data), new_key, folder)
+                    made.append((folder, e2["blob"]))
                     if e.get("thumb_blob"):
                         th = self.read(e, "thumb_blob")
-                        e2["thumb_blob"] = self._put_blob(iter([th]), len(th), new_key)
+                        e2["thumb_blob"] = self._put_blob(iter([th]), len(th), new_key, folder)
                         e2["thumb_len"] = len(th)
-                        made.append(e2["thumb_blob"])
-                    old += [b for b in (e.get("blob"), e.get("thumb_blob")) if b]
+                        made.append((folder, e2["thumb_blob"]))
+                    old += [os.path.join(folder, b + ".bcv") for b in (e.get("blob"), e.get("thumb_blob")) if b]
                     entries.append(e2)
                     if progress:
                         progress(i + 1, total)
             except Exception:
-                for b in made:                          # nothing changed: the new copies go again
+                for folder, b in made:                  # nothing changed: the new copies go again
                     try:
-                        os.remove(os.path.join(BLOBS, b + ".bcv"))
+                        os.remove(os.path.join(folder, b + ".bcv"))
                     except OSError:
                         pass
                 raise
@@ -511,8 +634,9 @@ class Vault:
                     pass
             self._finish_swap()
             self._key, self.entries = new_key, entries
-        for b in old:
-            shred.shred_file(os.path.join(BLOBS, b + ".bcv"))
+        self._mirror()
+        for f in old:
+            shred.shred_file(f)
         return rk
 
     def get(self, eid):
@@ -525,6 +649,18 @@ class Vault:
                 e.update(fields)
                 self._save_index()
 
+    def update_many(self, eids, **fields):
+        with self._lock:
+            ids = set(eids)
+            for e in self.entries:
+                if e["id"] in ids:
+                    e.update(fields)
+            self._save_index()
+
+    def file_of(self, entry):
+        """Where an entry's encrypted file is (for Show in folder)."""
+        return self._blob_path(entry, entry["blob"])
+
     def remove(self, eids):
         """Takes entries out and deletes their encrypted files (they are useless without the key anyway)."""
         from . import shred
@@ -536,7 +672,10 @@ class Vault:
         for e in gone:
             for b in (e.get("blob"), e.get("thumb_blob")):
                 if b:
-                    shred.shred_file(os.path.join(BLOBS, b + ".bcv"))
+                    try:
+                        shred.shred_file(self._blob_path(e, b))
+                    except VaultError:
+                        pass
         return len(gone)
 
     # ---- collections (only while open; their names are as private as the rest)
@@ -563,7 +702,7 @@ class Vault:
         with self._lock:
             self._need()
             self.collections = [c for c in self.collections if c["id"] != cid]
-            for e in self.entries:
+            for e in self.entries + self.offline:
                 if cid in (e.get("cols") or []):
                     e["cols"] = [x for x in e["cols"] if x != cid]
             self._save_index()
@@ -581,6 +720,24 @@ class Vault:
     def recent(self, kind=None):
         out = [e for e in self.entries if kind is None or e.get("kind") == kind]
         return sorted(out, key=lambda e: e.get("created", ""), reverse=True)
+
+
+def _same(a, b):
+    """Two files with the same bytes (read back from the drive, not from the cache of what was written)."""
+    import hashlib
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    hs = []
+    for p in (a, b):
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            while True:
+                chunk = fh.read(CHUNK)
+                if not chunk:
+                    break
+                h.update(chunk)
+        hs.append(h.digest())
+    return hs[0] == hs[1]
 
 
 vault = Vault()

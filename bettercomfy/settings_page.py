@@ -222,7 +222,10 @@ class SettingsPage(QWidget):
             self.autolock.addItem(t, m)
         set_combo(self.autolock, int(cfg.get("vault_autolock", 10)))
         self.autolock.currentIndexChanged.connect(lambda _=0: cfg.set("vault_autolock", self.autolock.currentData()))
-        c.add(self.v_state, hrow(self.v_make, self.v_lock, self.v_pw, None, self.v_del, spacing=4),
+        self.v_folder = button("Show its folder", self._vault_folder, "Ghost", "folder",
+                               "Where the encrypted files are. Their names are random and their dates all the same, so "
+                               "nothing there tells what they are.")
+        c.add(self.v_state, hrow(self.v_make, self.v_lock, self.v_pw, self.v_folder, None, self.v_del, spacing=4),
               field("Lock when idle", self.autolock, "No mouse or keyboard for that long locks it. It waits while the "
                                                      "queue is working or a vault video plays.", label_w=110),
               ToggleRow("Lock when minimized", "Once the queue is done, if it is still working",
@@ -253,6 +256,22 @@ class SettingsPage(QWidget):
         self._privacy_found.connect(self._show_privacy)
         self._pc_checked = False
         cards.add(c)
+
+        # ---------------------------------------------------------------- drives
+        c = Card("Drives")
+        c.add(label("Keep pictures and videos on a USB stick or another drive. What is on it shows in the gallery "
+                    "while it is plugged in, vault files only once the vault is open too, and its collections stay "
+                    "as they are. Right click pictures in the gallery, Move to.", "Faint", wrap=True))
+        self.drive_rows = QWidget()
+        self.drive_lay = QVBoxLayout(self.drive_rows)
+        self.drive_lay.setContentsMargins(0, 0, 0, 0)
+        self.drive_lay.setSpacing(8)
+        c.add(self.drive_rows, hrow(button("Add a drive…", self._add_drive, "Ghost", "plus"), None))
+        c.add(label("Vault files stay encrypted on the drive, and it keeps an encrypted copy of what is on it, so it "
+                    "works as a backup too. A USB stick has no Recycle Bin: deleting there is for good.", "Faint",
+                    wrap=True))
+        cards.add(c)
+        self.drives_changed()
 
         # ---------------------------------------------------------------- civitai
         self.civ_card = c = Card("Civitai")
@@ -573,6 +592,79 @@ class SettingsPage(QWidget):
         self.check_body.setText("<table>" + "".join(rows) + "</table>" +
                                 (f"<p style='color:{T.TEXT3}; font-size:12px'>Lists {src}.</p>" if src else ""))
 
+    def _vault_folder(self):
+        from .vault import DIR
+        if os.path.isdir(DIR):
+            system.open_folder(DIR)
+
+    # ---- drives
+    def drives_changed(self):
+        from . import stores
+        from .vault import vault
+        while self.drive_lay.count():
+            it = self.drive_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        if not stores.all_stores():
+            self.drive_lay.addWidget(label("No drive added yet.", "Muted"))
+            return
+        for s in stores.all_stores():
+            r = stores.root(s["id"])
+            n = sum(1 for e in self.app.history.items + self.app.history.offline if e.get("store") == s["id"])
+            nv = sum(1 for e in vault.entries + vault.offline if e.get("store") == s["id"]) if vault.is_open() else None
+            bits = [f"{n} picture{'s' if n != 1 else ''} and video{'s' if n != 1 else ''}"]
+            if nv:
+                bits.append(f"{nv} in the vault")
+            elif nv is None:
+                bits.append("vault files: unlock to see")
+            if r:
+                bits.append(f"{stores.free(s['id']) / 2 ** 30:.0f} GB free")
+                fs = stores.file_system(s["id"])
+                if fs.upper().startswith("FAT"):
+                    bits.append("FAT32: no files over 4 GB")
+            info = label(("  ·  ".join(bits)) + ("" if r else "  ·  not plugged in"), "Faint", wrap=True)
+            rm = button("Remove", lambda _=False, s=s: self._remove_drive(s), "Ghost", "close")
+            full = r or s["path"]
+            where = label(full if len(full) <= 56 else full[:22] + "…" + full[-30:], "Faint")
+            where.setToolTip(full)
+            row = hrow(icons_label("usb", r), vcol(label(stores.label(s), None), where, info, spacing=1),
+                       None, rm, spacing=10)
+            self.drive_lay.addWidget(row)
+
+    def _add_drive(self):
+        from . import stores
+        d = QFileDialog.getExistingDirectory(self, "Pick a USB stick or a folder on another drive")
+        if not d:
+            return
+        if os.path.normcase(os.path.abspath(d)).startswith(os.path.normcase(os.path.abspath(BASE))):
+            self.app.toast("That is inside Better Comfy's own data folder.", "warn")
+            return
+        try:
+            s = stores.add(d)
+        except OSError as ex:
+            self.app.toast(str(ex), "warn")
+            return
+        self.app._stores_changed()
+        self.app.toast(f"{stores.label(s)} added: {s['path']}", "ok")
+
+    def _remove_drive(self, s):
+        from . import stores
+        from .vault import vault
+        on = [e for e in self.app.history.items + self.app.history.offline if e.get("store") == s["id"]]
+        von = [e for e in vault.entries + vault.offline if e.get("store") == s["id"]] if vault.is_open() else []
+        if on or von:
+            QMessageBox.information(self, "Drives", f"{len(on) + len(von)} pictures and videos are on "
+                                                    f"{stores.label(s)}. Move them to this PC first (gallery, right "
+                                                    "click, Move to), or delete them.")
+            return
+        if not vault.is_open() and vault.exists():
+            QMessageBox.information(self, "Drives", "Unlock the vault first: vault files on the drive have to be "
+                                                    "checked before it leaves the list.")
+            return
+        stores.remove(s["id"])
+        self.app._stores_changed()
+        self.app.toast("Drive removed from the list. Its files stay on it.", "ok")
+
     # ---- civitai key
     def _civ_show(self):
         from . import civitai
@@ -620,7 +712,10 @@ class SettingsPage(QWidget):
                     res[key] = self.cleanup.scan(key)
                 except Exception:
                     res[key] = (0, None)
-            self._cleanup_found.emit(res)
+            try:
+                self._cleanup_found.emit(res)
+            except RuntimeError:                    # the window closed meanwhile
+                pass
         threading.Thread(target=work, daemon=True).start()
 
     def _show_cleanup(self, res):
@@ -1011,3 +1106,10 @@ class SettingsPage(QWidget):
                                                "videos, gallery and LoRA notes stay.)") == QMessageBox.StandardButton.Yes:
             cfg.reset()
             self.app.toast("Settings reset - restart Better Comfy to see all of them.", "ok")
+
+
+def icons_label(name, on=True):
+    lb = QLabel()
+    lb.setPixmap(icons.pixmap(name, 22, T.accent().name() if on else "#4A4A50"))
+    lb.setFixedWidth(28)
+    return lb

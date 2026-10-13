@@ -20,12 +20,14 @@ class History(QObject):
     removed = Signal(str)
     updated = Signal(str)
     changed = Signal()                  # collections changed
+    reloaded = Signal()                 # a drive was plugged in or out: what shows changed
     _bg_removed = Signal(list)
 
     def __init__(self):
         super().__init__()
         self._lock = threading.Lock()
         self.items = []
+        self.offline = []               # on a drive that is not plugged in: kept, not shown
         self._by_id = {}
         self.collections = []           # [{"id", "name", "smart": None | {filters}}]
         self._load()
@@ -53,14 +55,45 @@ class History(QObject):
                     elif "_patch" in e:
                         if eid in items:
                             items[eid].update(e["_patch"])
-                    elif e.get("file"):
+                    elif e.get("file") or e.get("store"):
                         if eid not in items:
                             order.append(eid)
                         items[eid] = e
         except OSError:
             pass
-        self.items = [items[i] for i in order if i in items and os.path.isfile(items[i].get("file", ""))]
+        # what lies on a drive waits until the drives were looked at (refresh_stores); the rest must exist
+        self.offline = [items[i] for i in order if i in items and items[i].get("store")]
+        self.items = [items[i] for i in order if i in items and not items[i].get("store") and
+                      os.path.isfile(items[i].get("file", ""))]
         self._by_id = {e["id"]: e for e in self.items}
+
+    def refresh_stores(self):
+        """Drives plugged in or out: what is on them shows or hides (nothing is forgotten)."""
+        from . import stores
+        changed = False
+        with self._lock:
+            show, hide = [], []
+            for e in self.items + self.offline:
+                sid = e.get("store")
+                r = stores.root(sid) if sid else None
+                if sid and not (r and os.path.isfile(os.path.join(r, e.get("rel") or ""))):
+                    hide.append(e)
+                    continue
+                if sid:
+                    f = os.path.join(r, e["rel"])
+                    th = os.path.join(r, e["thumb_rel"]) if e.get("thumb_rel") else None
+                    if e.get("file") != f or e.get("thumb") != th:
+                        e["file"], e["thumb"] = f, th
+                        changed = True
+                show.append(e)
+            if len(hide) != len(self.offline) or {id(x) for x in hide} != {id(x) for x in self.offline}:
+                changed = True
+            show.sort(key=lambda e: e.get("created", ""))
+            self.items, self.offline = show, hide
+            self._by_id = {e["id"]: e for e in self.items}
+        if changed:
+            self.reloaded.emit()
+        return changed
 
     def _append(self, obj):
         os.makedirs(BASE, exist_ok=True)
@@ -72,7 +105,7 @@ class History(QObject):
         os.makedirs(BASE, exist_ok=True)
         tmp = _FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            for e in self.items:
+            for e in self.items + self.offline:
                 fh.write(json.dumps(e, ensure_ascii=False) + "\n")
         if shred_old and os.path.isfile(_FILE):
             from . import shred

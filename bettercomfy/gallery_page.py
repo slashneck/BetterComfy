@@ -16,6 +16,7 @@ from .vault import vault
 from .components import _Loader
 from .widgets import (ChipBox, Combo, FileList, Player, Segmented, anims_on, button, chip, hrow, icon_button, label,
                       nice_name, set_combo)
+from . import stores
 
 SORTS = [("new", "Newest first"), ("old", "Oldest first"), ("model", "Checkpoint"), ("lora", "LoRA"),
          ("preset", "Preset"), ("type", "Type"), ("size", "Size")]
@@ -58,11 +59,20 @@ class Nav(QListWidget):
                            f"{T.SURFACE3}; color: {T.TEXT}; }}")
 
     def dragEnterEvent(self, e):
-        e.acceptProposedAction() if e.source() is self.page.grid else e.ignore()
+        e.acceptProposedAction() if e.source() is self.page.grid or _outside(e) else e.ignore()
 
     def dragMoveEvent(self, e):
         it = self.itemAt(e.position().toPoint())
         key = it.data(Qt.ItemDataRole.UserRole) if it else None
+        if _outside(e):
+            # files from Explorer: onto a place they can go (the vault only while it is open)
+            ok = isinstance(key, str) and (key in ("all", "image", "video", "vault") or key.startswith(
+                ("vcol:", "store:")) or (key.startswith("col:") and not (self.page.history.collection(key[4:]) or {})
+                                         .get("smart")))
+            if ok and (key == "vault" or key.startswith("vcol:")) and not vault.is_open():
+                ok = key == "vault" and vault.exists()
+            e.acceptProposedAction() if ok else e.ignore()
+            return
         sel = self.page._selected()
         vault_sel = bool(sel) and all(x.get("vault") for x in sel)
         if isinstance(key, str) and key.startswith("vcol:"):
@@ -75,6 +85,10 @@ class Nav(QListWidget):
     def dropEvent(self, e):
         it = self.itemAt(e.position().toPoint())
         key = it.data(Qt.ItemDataRole.UserRole) if it else ""
+        if _outside(e):
+            self.page.import_to(key, _paths(e))
+            e.acceptProposedAction()
+            return
         if key.startswith("vcol:"):
             from .vault import vault as _v
             c = _v.collection(key[5:]) if _v.is_open() else None
@@ -87,6 +101,45 @@ class Nav(QListWidget):
             c = self.page.history.collection(key[4:])
             self.page.app.toast(f"Added {len(ids)} to {c['name']}.", "ok")
         e.acceptProposedAction()
+
+
+def _outside(e):
+    """A drag of files from Explorer or another app (not from this gallery)."""
+    return e.source() is None and e.mimeData().hasUrls()
+
+
+def _paths(e):
+    return [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()]
+
+
+class _Grid(FileList):
+    """The gallery grid: drags its pictures out as files, and takes pictures dropped in from outside (imported into
+    the place that is shown)."""
+
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+
+    def dragEnterEvent(self, e):
+        if _outside(e):
+            e.acceptProposedAction()
+        else:
+            super().dragEnterEvent(e)
+
+    def dragMoveEvent(self, e):
+        if _outside(e):
+            e.acceptProposedAction()
+        else:
+            e.ignore()                          # its own pictures don't move inside it
+
+    def dropEvent(self, e):
+        if _outside(e):
+            self.page.import_to(self.page.place, _paths(e))
+            e.acceptProposedAction()
+        else:
+            e.ignore()
 
 
 class GalleryPage(QWidget):
@@ -118,6 +171,9 @@ class GalleryPage(QWidget):
         self.nav.customContextMenuRequested.connect(self._nav_menu)
         nv.addWidget(self.nav, 1)
         nv.addWidget(button("New collection", self._new_collection, "Ghost", "plus"))
+        imp = button("Import…", self._import, "Ghost", "upload",
+                     "Bring pictures and videos in from a folder or another app (or drop them onto the gallery)")
+        nv.addWidget(imp)
         h.addWidget(navw)
 
         # ---- grid
@@ -187,7 +243,7 @@ class GalleryPage(QWidget):
         lp.addWidget(hrow(None, self.lock_btn, None))
         lp.addStretch(2)
         lv.addWidget(self.lockpanel, 1)
-        self.grid = FileList()
+        self.grid = _Grid(self)
         self.grid.file_of = lambda eid: (self.history.get(eid) or {}).get("file")       # (vault: nothing)
         self.grid.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -273,6 +329,7 @@ class GalleryPage(QWidget):
         self.history.removed.connect(self._changed)
         self.history.updated.connect(self._updated)
         self.history.changed.connect(self._fill_nav)
+        self.history.reloaded.connect(self.drives_changed)
         self._dirty = True
         self._fill_nav()
         self._enable()
@@ -376,6 +433,31 @@ class GalleryPage(QWidget):
                 self.nav.addItem(it)
                 if cur == "vcol:" + c["id"]:
                     self.nav.setCurrentItem(it)
+        if stores.all_stores():
+            head("Drives")
+            vis = list(items) + (list(vault.entries) if vault.is_open() else [])
+            it = QListWidgetItem(icons.icon("monitor", "#A1A1AA", 16),
+                                 f"This PC   {sum(1 for e in vis if not e.get('store'))}")
+            it.setData(Qt.ItemDataRole.UserRole, "store:pc")
+            it.setToolTip("What is kept on this computer")
+            self.nav.addItem(it)
+            if cur == "store:pc":
+                self.nav.setCurrentItem(it)
+            for s in stores.all_stores():
+                on = bool(stores.root(s["id"]))
+                n = sum(1 for e in vis if e.get("store") == s["id"])
+                it = QListWidgetItem(icons.icon("usb", "#A1A1AA" if on else "#4A4A50", 16),
+                                     f"{stores.label(s)}   {n}" if on else stores.label(s))
+                it.setData(Qt.ItemDataRole.UserRole, "store:" + s["id"])
+                if on:
+                    it.setToolTip(f"{stores.root(s['id'])}\nRight click pictures, Move to, to put them here")
+                    if cur == "store:" + s["id"]:
+                        self.nav.setCurrentItem(it)
+                else:
+                    it.setFlags(Qt.ItemFlag.NoItemFlags)
+                    it.setForeground(QColor(T.TEXT3))
+                    it.setToolTip("Plug it in and what is on it shows up here (vault files once the vault is open)")
+                self.nav.addItem(it)
         head("Collections")
         if not self.history.collections:
             it = QListWidgetItem("None yet")
@@ -490,6 +572,8 @@ class GalleryPage(QWidget):
 
     def _in_place(self, e):
         p = self.place
+        if p.startswith("store:"):
+            return (e.get("store") or "pc") == p[6:]
         if p == "vault":
             return bool(e.get("vault")) and not self._filed(e)
         if p.startswith("vcol:"):
@@ -689,7 +773,7 @@ class GalleryPage(QWidget):
 
     # ------------------------------------------------------------------ grid
     def _icon(self, e):
-        key = (e["id"], self.thumb, bool(e.get("fav")), bool(e.get("marked")))
+        key = (e["id"], self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("store"), e.get("thumb"))
         if e.get("vault"):
             return self._vicon(e)
         if key not in self._icons:
@@ -732,6 +816,11 @@ class GalleryPage(QWidget):
                 p.setBrush(QColor(T.BAD))
                 p.drawEllipse(QPointF(34, 34), 22, 22)
                 p.drawPixmap(QPointF(19, 19), icons.pixmap("trash", 30, "#FFFFFF", dpr=1.0))
+            if e.get("store"):
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(0, 0, 0, 150))
+                p.drawEllipse(QPointF(s - 34, s - 34), 22, 22)
+                p.drawPixmap(QPointF(s - 49, s - 49), icons.pixmap("usb", 30, "#FFFFFF", dpr=1.0))
             p.end()
             out.setDevicePixelRatio(2.0)
             self._icons[key] = QIcon(out)
@@ -744,7 +833,7 @@ class GalleryPage(QWidget):
             self._vthumbs, self._vdata, self._vgen, self._vqueue, self._vbusy = {}, {}, 0, deque(), False
             self._vph = {}                              # the lock tiles shown until a thumbnail is decrypted
             self._vthumb_ready.connect(self._vthumb_done)
-        key = (e["id"], self.thumb)
+        key = self._vkey(e)
         if key in self._vthumbs:
             return self._vthumbs[key]
         if e["id"] in self._vdata:
@@ -786,13 +875,16 @@ class GalleryPage(QWidget):
         e = vault.get(eid)
         if e is None:
             return
-        ic = self._vthumbs[(eid, self.thumb)] = self._vrender(e, data)
+        ic = self._vthumbs[self._vkey(e)] = self._vrender(e, data)
         it = self._rows.get(eid)
         if it is not None:
             try:
                 it.setIcon(ic)
             except RuntimeError:                        # the grid was refilled meanwhile
                 pass
+
+    def _vkey(self, e):
+        return (e["id"], self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("store"))
 
     def _vrender(self, e, data):
         s = self.thumb * 2
@@ -811,7 +903,10 @@ class GalleryPage(QWidget):
         if not src.isNull():
             src = src.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                              Qt.TransformationMode.SmoothTransformation)
+            if e.get("marked"):
+                p.setOpacity(0.38)
             p.drawPixmap((s - src.width()) // 2, (s - src.height()) // 2, src)
+            p.setOpacity(1.0)
         p.setClipping(False)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(0, 0, 0, 150))
@@ -820,9 +915,66 @@ class GalleryPage(QWidget):
         if e.get("kind") == "video":
             p.drawEllipse(QPointF(34, s - 34), 22, 22)
             p.drawPixmap(QPointF(21, s - 47), icons.pixmap("play", 26, "#FFFFFF", dpr=1.0))
+        if e.get("marked"):
+            p.setBrush(QColor(T.BAD))
+            p.drawEllipse(QPointF(34, 34), 22, 22)
+            p.drawPixmap(QPointF(19, 19), icons.pixmap("trash", 30, "#FFFFFF", dpr=1.0))
+            p.setBrush(QColor(0, 0, 0, 150))
+        elif e.get("store"):
+            p.drawEllipse(QPointF(34, 34), 22, 22)
+            p.drawPixmap(QPointF(19, 19), icons.pixmap("usb", 30, "#FFFFFF", dpr=1.0))
+        if e.get("fav"):
+            p.drawEllipse(QPointF(s - 34, 34), 22, 22)
+            p.drawPixmap(QPointF(s - 50, 18), icons.pixmap("starf", 32, "#F5B041", dpr=1.0))
         p.end()
         out.setDevicePixelRatio(2.0)
         return QIcon(out)
+
+    def _move_menu(self, m, sel):
+        """Move to: this PC or one of the drives (Settings, Drives)."""
+        if not stores.all_stores():
+            return
+        sub = m.addMenu(icons.icon("usb", "#A1A1AA", 16), "Move to")
+        here = {e.get("store") or None for e in sel}
+        a = sub.addAction(icons.icon("monitor", "#A1A1AA", 16), "This PC")
+        a.setEnabled(here != {None})
+        a.triggered.connect(lambda: self.app.move_to_store(sel, None))
+        for s in stores.all_stores():
+            a = sub.addAction(icons.icon("usb", "#A1A1AA", 16), stores.label(s))
+            a.setEnabled(bool(stores.root(s["id"])) and here != {s["id"]})
+            a.triggered.connect(lambda _=False, sid=s["id"]: self.app.move_to_store(sel, sid))
+
+    def drives_changed(self):
+        """A drive plugged in or out, or pictures moved: tiles, places and counts again."""
+        self._icons.clear()
+        if hasattr(self, "_vthumbs"):
+            self._vthumbs = {}
+        if self.place.startswith("store:") and self.place != "store:pc" and not stores.root(self.place[6:]):
+            self.place = "all"
+        self._changed()
+
+    # ---- importing from outside
+    def _import(self):
+        from PySide6.QtWidgets import QFileDialog
+        exts = " ".join("*" + x for x in self.app.IMPORT_EXT)
+        files, _f = QFileDialog.getOpenFileNames(self, "Import pictures and videos", "", f"Pictures and videos ({exts})")
+        if files:
+            self.import_to(self.place, files)
+
+    def import_to(self, key, paths):
+        """Files from outside into a place: the vault (or one of its collections), a drive, a collection, or
+        simply the gallery."""
+        key = key or "all"
+        if not paths:
+            return
+        if key == "vault" or key.startswith("vcol:"):
+            self.app.import_files(paths, into_vault=True, col=key[5:] if key.startswith("vcol:") else None)
+        elif key.startswith("store:") and key != "store:pc":
+            self.app.import_files(paths, sid=key[6:])
+        elif key.startswith("col:") and not (self.history.collection(key[4:]) or {}).get("smart"):
+            self.app.import_files(paths, col=key[4:])
+        else:
+            self.app.import_files(paths)
 
     def _sorted(self, items):
         k = self.sort.currentData()
@@ -849,8 +1001,12 @@ class GalleryPage(QWidget):
             f["q"] = self.search.text().strip()
         in_vault = self.place == "vault" or self.place.startswith("vcol:")
         source = (vault.entries if vault.is_open() else []) if in_vault else self.history.items
+        if self.place.startswith("store:"):
+            source = list(self.history.items) + (list(vault.entries) if vault.is_open() else [])
         items = [e for e in source if self._in_place(e) and _matches(e, f)]
         items = self._sorted(items)
+        if in_vault:
+            items = [e for e in items if e.get("fav")] + [e for e in items if not e.get("fav")]   # favourites on top
         keep = self.cur["id"] if self.cur else None
         self._shown = items[:5000]
         self.grid.blockSignals(True)
@@ -871,10 +1027,14 @@ class GalleryPage(QWidget):
         self.grid.setVisible(bool(items))
         self.empty.setVisible(not items)
         self.empty.setText({"fav": "No favourites yet. Press F (or the star) on anything you like.",
+                            "store:pc": "Nothing here.",
                             "marked": "Nothing marked. Press X on what should go, then delete them all at once here.",
                             }.get(self.place, "Nothing here yet. Everything you generate shows up here, with its "
                                               "settings." if not (f or self.place.startswith("col:")) else
                                   "Nothing fits here."))
+        if self.place.startswith("store:") and self.place != "store:pc" and not items:
+            self.empty.setText("Nothing on this drive yet. Right click pictures (vault ones too), Move to, or drop "
+                               "pictures from a folder here.")
         locked = in_vault and not vault.is_open()
         self.lockpanel.setVisible(locked)
         self.vbar.setVisible(in_vault and vault.is_open())
@@ -894,6 +1054,9 @@ class GalleryPage(QWidget):
                                "picture.")
         marked = sum(1 for e in self.history.items if e.get("marked"))
         self.banner.setVisible(self.place == "marked" and marked > 0)
+        if in_vault and vault.is_open():
+            marked = sum(1 for e in vault.entries if e.get("marked"))
+            self.banner.setVisible(marked > 0)
         self.banner_text.setText(f"{marked} marked for deletion")
         self._chips()
         if self.cur and (not self._get(self.cur["id"]) or self.cur["id"] not in {e["id"] for e in self._shown}):
@@ -984,18 +1147,19 @@ class GalleryPage(QWidget):
         self.b["inpaint"].setVisible(img)
         self.b["extend"].setVisible(not img)
         self.b["compare"].setVisible(on and bool(self.cur.get("group")) and not inv)
-        self.b["folder"].setVisible(not inv)
+        self.b["folder"].setVisible(True)
         self.b["move_vault"].setVisible(not inv)
         self.b["take_out"].setVisible(inv)
         for b in (self.fav_btn, self.mark_btn):
-            b.setVisible(not inv)
+            b.setVisible(True)
+        self.b["folder"].setToolTip("Show where its encrypted file is" if inv else "Show in folder")
         self.col_btn.setToolTip("Vault collections" if inv else "Collections")
         if hasattr(self, "multi_row"):
             self._sel_changed()
 
     # ------------------------------------------------------------------ actions
     def _flag(self, key):
-        sel = [e for e in self._selected() if not e.get("vault")]
+        sel = self._selected()
         if not sel:
             return
         on = self.app.toggle_flag(sel, key)
@@ -1007,15 +1171,38 @@ class GalleryPage(QWidget):
         if 0 <= r < self.grid.count() - 1:
             self.grid.setCurrentRow(r + 1)
 
+    def _in_vault(self):
+        return self.place == "vault" or self.place.startswith("vcol:")
+
     def _unmark_all(self):
+        if self._in_vault():
+            ids = [x["id"] for x in vault.entries if x.get("marked")]
+            if ids:
+                vault.update_many(ids, marked=False)
+                self.vault_flags(ids)
+            return
         for e in [x for x in self.history.items if x.get("marked")]:
             self.history.update(e["id"], marked=False)
         self.fill()
 
     def _delete_marked(self):
+        if self._in_vault():
+            marked = [x for x in vault.entries if x.get("marked")]
+            if marked:
+                self.app.delete_vault(marked)
+            return
         marked = [x for x in self.history.items if x.get("marked")]
         if marked:
             self.app.delete_entries(marked)
+
+    def vault_flags(self, ids):
+        """Favourite / marked changed on vault items: their tiles, the order and the banner again."""
+        if hasattr(self, "_vthumbs"):
+            self._vthumbs = {k: v for k, v in self._vthumbs.items() if k[0] not in set(ids)}
+        if self.cur and self.cur.get("vault"):
+            self.cur = vault.get(self.cur["id"]) or self.cur
+            self._flags_ui()
+        self.fill()
 
     def _col_menu(self, entries=None, pos=None):
         entries = entries or self._selected()
@@ -1105,7 +1292,18 @@ class GalleryPage(QWidget):
                 else:
                     m.addAction(icons.icon("arrow", "#A1A1AA", 16), "Extend (private)").triggered.connect(
                         lambda: self.app.result_action("extend", e, self))
+            allfav = all(x.get("fav") for x in sel)
+            allmark = all(x.get("marked") for x in sel)
             m.addSeparator()
+            m.addAction(icons.icon("starf" if not allfav else "star", "#F5B041", 16),
+                        ("Remove from favourites" if allfav else "Favourite") + (f" ({len(sel)})" if many else "")
+                        ).triggered.connect(lambda: self.app.toggle_flag(sel, "fav"))
+            m.addAction(icons.icon("trash", "#FF8A8A", 16),
+                        ("Unmark" if allmark else "Mark for deletion") + (f" ({len(sel)})" if many else "")
+                        ).triggered.connect(lambda: self.app.toggle_flag(sel, "marked"))
+            if not many:
+                m.addAction(icons.icon("folder", "#A1A1AA", 16), "Show where its file is").triggered.connect(
+                    lambda: self.app.result_action("folder", e, self))
             m.addAction(icons.icon("layers", "#A1A1AA", 16), "Vault collections…").triggered.connect(
                 lambda: self._vcol_menu(sel, self.grid.mapToGlobal(pos)))
             if self.place.startswith("vcol:"):
@@ -1115,6 +1313,7 @@ class GalleryPage(QWidget):
                         lambda: self._vcol_set(sel, c, False))
             m.addAction(icons.icon("unlock", "#A1A1AA", 16), f"Take out of the vault{f' ({len(sel)})' if many else ''}"
                         ).triggered.connect(lambda: self.app.take_out_of_vault(sel))
+            self._move_menu(m, sel)
             m.addAction(icons.icon("trash", "#FF8A8A", 16), f"Delete{f' {len(sel)} items' if many else ''}"
                         ).triggered.connect(lambda: self.app.delete_vault(sel))
             m.exec(self.grid.mapToGlobal(pos))
@@ -1161,6 +1360,7 @@ class GalleryPage(QWidget):
         m.addSeparator()
         m.addAction(icons.icon("lock", "#A1A1AA", 16), f"Move to the vault{f' ({len(sel)})' if many else ''}"
                     ).triggered.connect(lambda: self.app.move_to_vault(sel))
+        self._move_menu(m, sel)
         m.addAction(icons.icon("trash", "#FF8A8A", 16), f"Delete{f' {len(sel)} items' if many else ''}"
                     ).triggered.connect(lambda: self.app.delete_entries(sel))
         m.exec(self.grid.mapToGlobal(pos))
