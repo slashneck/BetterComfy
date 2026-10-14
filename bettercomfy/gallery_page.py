@@ -390,8 +390,9 @@ class GalleryPage(QWidget):
         cur = self.place
         items = self.history.items
         loose = [e for e in items if not self._filed(e)]
-        counts = {"all": len(loose), "fav": sum(1 for e in items if e.get("fav")),
-                  "marked": sum(1 for e in items if e.get("marked")),
+        ventries = list(vault.entries) if vault.is_open() else []
+        counts = {"all": len(loose), "fav": sum(1 for e in items + ventries if e.get("fav")),
+                  "marked": sum(1 for e in items + ventries if e.get("marked")),
                   "image": sum(1 for e in loose if e.get("kind") == "image"),
                   "video": sum(1 for e in loose if e.get("kind") == "video")}
         self.nav.blockSignals(True)
@@ -1001,12 +1002,10 @@ class GalleryPage(QWidget):
             f["q"] = self.search.text().strip()
         in_vault = self.place == "vault" or self.place.startswith("vcol:")
         source = (vault.entries if vault.is_open() else []) if in_vault else self.history.items
-        if self.place.startswith("store:"):
+        if self.place.startswith("store:") or self.place in ("fav", "marked"):
             source = list(self.history.items) + (list(vault.entries) if vault.is_open() else [])
         items = [e for e in source if self._in_place(e) and _matches(e, f)]
         items = self._sorted(items)
-        if in_vault:
-            items = [e for e in items if e.get("fav")] + [e for e in items if not e.get("fav")]   # favourites on top
         keep = self.cur["id"] if self.cur else None
         self._shown = items[:5000]
         self.grid.blockSignals(True)
@@ -1052,7 +1051,8 @@ class GalleryPage(QWidget):
         elif in_vault and not items:
             self.empty.setText("The vault is empty. Turn on Private (the lock next to Generate) or use 'To vault' on a "
                                "picture.")
-        marked = sum(1 for e in self.history.items if e.get("marked"))
+        marked = sum(1 for e in self.history.items if e.get("marked")) + \
+            (sum(1 for e in vault.entries if e.get("marked")) if vault.is_open() else 0)
         self.banner.setVisible(self.place == "marked" and marked > 0)
         if in_vault and vault.is_open():
             marked = sum(1 for e in vault.entries if e.get("marked"))
@@ -1175,22 +1175,24 @@ class GalleryPage(QWidget):
         return self.place == "vault" or self.place.startswith("vcol:")
 
     def _unmark_all(self):
-        if self._in_vault():
+        if vault.is_open() and (self._in_vault() or self.place == "marked"):
             ids = [x["id"] for x in vault.entries if x.get("marked")]
             if ids:
                 vault.update_many(ids, marked=False)
                 self.vault_flags(ids)
-            return
+            if self._in_vault():
+                return
         for e in [x for x in self.history.items if x.get("marked")]:
             self.history.update(e["id"], marked=False)
         self.fill()
 
     def _delete_marked(self):
-        if self._in_vault():
+        if vault.is_open() and (self._in_vault() or self.place == "marked"):
             marked = [x for x in vault.entries if x.get("marked")]
             if marked:
                 self.app.delete_vault(marked)
-            return
+            if self._in_vault():
+                return
         marked = [x for x in self.history.items if x.get("marked")]
         if marked:
             self.app.delete_entries(marked)
@@ -1238,10 +1240,12 @@ class GalleryPage(QWidget):
             return
         if k == "delete":
             sel = self._selected()
-            if sel and sel[0].get("vault"):
-                self.app.delete_vault(sel)
-            else:
-                self.app.delete_entries(sel)
+            vsel = [e for e in sel if e.get("vault")]
+            psel = [e for e in sel if not e.get("vault")]
+            if vsel:
+                self.app.delete_vault(vsel)
+            if psel:
+                self.app.delete_entries(psel)
             return
         if k == "move_vault":
             self.app.move_to_vault([e for e in self._selected() if not e.get("vault")])

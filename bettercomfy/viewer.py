@@ -141,7 +141,7 @@ class Viewer(QWidget):
     def _flag(self, key):
         e = self.cur()
         app = getattr(self, "app", None)
-        if e is None or app is None or e.get("vault"):
+        if e is None or app is None:
             return
         on = app.toggle_flag([e], key)
         self.update()
@@ -289,7 +289,10 @@ class Viewer(QWidget):
         elif k == Qt.Key.Key_X:
             self._flag("marked")
         elif k == Qt.Key.Key_Delete and getattr(self, "app", None) and self.cur():
-            self.app.delete_entries([self.cur()])
+            if self.cur().get("vault"):
+                self.app.delete_vault([self.cur()])
+            else:
+                self.app.delete_entries([self.cur()])
         elif k in (Qt.Key.Key_Left, Qt.Key.Key_A):
             self.step(-1)
         elif k in (Qt.Key.Key_Right, Qt.Key.Key_D):
