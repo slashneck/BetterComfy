@@ -521,9 +521,7 @@ TEMPS = {"surprise": 0.8, "idea": 0.7}
 LIMITS = {"tags": 130, "mixed": 120, "natural": 220, "motion": 100}
 
 _PROTECT = re.compile(r"<lora:[^>]+>|\{[^{}]*\|[^{}]*\}[^,<>(){}\n]*|\([^()]+:\s*-?\d+(?:\.\d+)?\)")
-# words the model likes to add that mean nothing to the image model, or are added by the app on its own
-_FILLER = {"composition", "lighting", "expression", "setting", "atmosphere", "pose", "body", "hair", "eyes",
-           "clothing", "framing", "character", "series", "background", "style", "mood", "details", "detail"}
+# quality words: the app adds them itself (by the preset)
 _QUALITY = re.compile(r"^\(?(masterpiece|best quality|high quality|highest quality|quality|amazing quality|very "
                       r"aesthetic|absurdres|highres|ultra detailed|extremely detailed|8k|4k|hdr|score_\d(_up)?)"
                       r"(:[\d.]+)?\)?$", re.I)
@@ -641,51 +639,20 @@ def _tipo_rating(text):
         tags.rating_of(text)
 
 
-# what TIPO learned from Danbooru posts but nobody wants in a prompt: censoring, text, watermarks, post meta
-_TIPO_DROP = re.compile(r"^(censored|uncensored|.*\bcensor(ing|ed)?|bar censor|mosaic.*|watermark|signature|"
-                        r"meme|.*\(meme\)|.*\bmeme\b.*|giving|doing|having|\d+koma|comic|"
-                        r"artist name|.*\btext|text|logo|.*\blogo|web address|.*username|dated|copyright notice|"
-                        r"speech bubble|translated|translation request|commentary.*|.*commentary|jpeg artifacts|"
+# what TIPO learned from Danbooru posts that would land in the picture itself: censor bars, text and watermarks,
+# and the post's file details. Nothing about what is shown. Words you wrote yourself always stay.
+_TIPO_DROP = re.compile(r"^(censored|.*\bcensoring|bar censor|mosaic censoring|watermark|signature|"
+                        r"artist name|english text|.*\btext|logo|web address|.*username|dated|copyright notice|"
+                        r"translated|translation request|commentary.*|.*commentary|jpeg artifacts|"
                         r"lowres|highres|absurdres|.*resolution|patreon.*|.*patreon|fanbox.*|sample watermark|"
                         r"photoshop \(medium\)|ai-generated|ai-assisted)$", re.I)
-_TALK = re.compile(r"(?i)\b(watermark|signature|logo|caption|speech bubble|written|writing|lettering|website|url|"
-                   r"copyright|japanese|chinese|korean|text)\b")
-
-
-# tags that bring a man or a partner in: dropped when the prompt only has women in it
-_PARTNER = re.compile(r"^(.*\bmale\b.*|penis|hetero|testicles|erection|mixed-sex.*|shared bathing|solo focus|"
-                      r"after sex|after (vaginal|anal|oral|fellatio)|cum in (pussy|ass|mouth)|creampie|cumdrip|"
-                      r"sex|sex from behind|vaginal|anal|fellatio|paizuri|handjob|doggystyle|missionary|"
-                      r"cowgirl position|.*\bboys?\b.*|netorare|faceless.*|interracial|pov.*)$", re.I)
+_TALK = re.compile(r"(?i)\b(watermark|signature|logo|caption|speech bubble|lettering|website|url|copyright notice)\b")
 
 
 # words and acts that bring a man into a prompt that only names a woman
 _NEEDS_MAN = re.compile(r"\b(blow ?jobs?|fellatio|handjobs?|paizuri|titjob|sex|fuck\w*|riding (a|the|his) (man|guy|cock|"
                         r"dick)|cowgirl|doggy\w*|missionary|penis|cock|dick|man|men|guy|boyfriend|husband|couple|"
                         r"hetero)\b")
-
-
-def _people_ok(tag_list, people, mine=()):
-    """Keeps the people of the prompt: TIPO's own other counts go, and with only women in the prompt nothing that
-    brings a man or a partner in (unless the prompt itself says it)."""
-    from . import tags
-    if not people:
-        return tag_list
-    want = {tags.norm(p) for p in people}
-    own = {tags.norm(t) for t in mine}
-    women_only = not any("boy" in w or "other" in w for w in want)
-    out = []
-    for t in tag_list:
-        k = tags.norm(t)
-        if k in own:
-            out.append(t)
-            continue
-        if tags.PEOPLE.match(k) and k not in want and not (k == "solo" and len(want) == 1):
-            continue
-        if women_only and _PARTNER.match(k) and "female" not in k:
-            continue
-        out.append(t)
-    return out
 
 
 def _no_talk(text):
@@ -719,9 +686,6 @@ def _ask_tipo(task, text, on_text=None, cancel=None, natural=False):
         raw = tagger.complete(prompt, (lambda t: on_text(t.split("\n")[0].strip())) if on_text else None, cancel,
                               n_predict=260, temperature=0.65, stop=["\n"])
         out = _no_talk(raw.split("\n")[0].strip())
-        if _tipo_rating(text + " " + out) != "safe":
-            # Danbooru's "1girl" only means one female character; in adult prompts the sentence says woman
-            out = re.sub(r"\b(?:young |little )?girl(s?)\b", lambda m: "women" if m.group(1) else "woman", out)
         return with_protected(out, keep, "natural")
     people = [t for t in (mine or tags.extract(plain)) if tags.PEOPLE.match(tags.norm(t)) and tags.norm(t) != "solo"]
     if people and not any("boy" in tags.norm(p) or "other" in tags.norm(p) for p in people) and \
@@ -750,12 +714,11 @@ def _ask_tipo(task, text, on_text=None, cancel=None, natural=False):
     raw = tagger.complete(prompt, live if on_text else None, cancel, n_predict=220,
                           temperature=0.9 if task == "surprise" else 0.65, stop=["\n"])
     new = [x.strip() for x in raw.split("\n")[0].split(",") if x.strip()]
-    new = _people_ok([t for t in new if not _TIPO_DROP.match(t.strip()) or tags.norm(t) in
-                      {tags.norm(x) for x in mine}], people, lead)
+    new = [t for t in new if not _TIPO_DROP.match(t.strip()) or tags.norm(t) in {tags.norm(x) for x in mine}]
     return with_protected(merge_tags(", ".join(lead + new), ""), keep, "tags")
 
 
-def merge_tags(answer, source_text="", cap=45):
+def merge_tags(answer, source_text="", cap=150):
     """Tidies a tag answer, puts the people count first, and adds every real tag found in `source_text` that the
     model left out (so turning text into tags never comes back half done)."""
     from . import tags
@@ -766,7 +729,7 @@ def merge_tags(answer, source_text="", cap=45):
     people = [t for t in got if tags.PEOPLE.match(tags.norm(t))]
     rest = [t for t in got if t not in people]
     seen, out = set(), []
-    for t in people[:2] + rest:
+    for t in people + rest:
         k = tags.norm(t)
         if k not in seen:
             seen.add(k)
@@ -824,9 +787,9 @@ def clean(t, style, finished=True):
     return t
 
 
-def known_tags(t, original="", cap=35):
-    """Tidies a tag answer: known tags (and their aliases) in Danbooru's spelling, short phrases kept, long sentences,
-    filler words and quality words (the app adds those itself) left out."""
+def known_tags(t, original="", cap=150):
+    """Tidies a tag answer: known tags (and their aliases) in Danbooru's spelling, everything else as written. Only
+    the tag blacklist (Settings), quality words (the app adds those itself) and doubles are left out."""
     from . import tags
     known, alias, cats = tags.lookup()
     mine = {p.strip().lower() for p in re.split(r"[,\n]+", original or "") if p.strip()}
@@ -837,16 +800,14 @@ def known_tags(t, original="", cap=35):
             tag = p
         elif tags.blocked(k, exact=cats.get(tags.norm(alias.get(k, k)), "general") != "general"):
             continue                            # the tag blacklist (Settings): never added by the helper
-        elif _QUALITY.match(k) or k in _FILLER:
+        elif _QUALITY.match(k):
             continue
         elif k in known:
             tag = tags.for_prompt(known[k])
         elif k in alias:
             tag = tags.for_prompt(alias[k])
-        elif 2 <= len(k.split()) <= 4 and re.fullmatch(r"[a-z0-9 '\-]+", k):     # a short phrase
-            tag = p
         else:
-            continue
+            tag = p
         if tag.lower() not in seen:
             seen.add(tag.lower())
             out.append(tag)

@@ -189,16 +189,24 @@ def search(host, kind="LORA", query="", made_for=None, sort=0, cursor=None, limi
     if host not in _HOSTS:
         raise FetchError("Unknown site.")
     s, period, _t = SORTS[sort]
-    q = [("limit", str(limit)), ("types", kind), ("sort", s), ("period", period)]
-    if not nsfw:
-        q.append(("nsfw", "false"))
+    q = [("limit", str(limit)), ("types", kind), ("sort", s)]
+    if not query.strip():
+        q.append(("period", period))        # with a search word Civitai finds nothing within a time span
+    # NSFW on: asked for outright (without it Civitai leaves most of them out of a search)
+    q.append(("nsfw", "true" if nsfw else "false"))
     if query.strip():
         q.append(("query", query.strip()))
     for b in MARKET_BASES.get(made_for or "", []):
         q.append(("baseModels", b))
     if cursor:
         q.append(("cursor", str(cursor)))
-    d = _json(f"https://{host}/api/v1/models?" + urllib.parse.urlencode(q))
+    url = f"https://{host}/api/v1/models?" + urllib.parse.urlencode(q)
+    try:
+        d = _json(url)
+    except FetchError:
+        import time
+        time.sleep(1.5)                     # Civitai's search hiccups now and then: once more
+        d = _json(url)
     return d.get("items") or [], (d.get("metadata") or {}).get("nextCursor")
 
 
