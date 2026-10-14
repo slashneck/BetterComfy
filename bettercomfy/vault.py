@@ -682,13 +682,20 @@ class Vault:
     def collection(self, cid):
         return next((c for c in self.collections if c["id"] == cid), None)
 
-    def add_collection(self, name):
+    def add_collection(self, name, parent=None):
+        from . import folders
         with self._lock:
             self._need()
-            c = {"id": uuid.uuid4().hex[:10], "name": name.strip()[:80] or "Collection"}
-            self.collections.append(c)
+            c = {"id": uuid.uuid4().hex[:10], "name": name.strip()[:80] or "Collection", "parent": parent}
+            self.collections = folders.ordered(self.collections + [c])
             self._save_index()
             return c
+
+    def set_collections(self, cols):
+        with self._lock:
+            self._need()
+            self.collections = list(cols)
+            self._save_index()
 
     def rename_collection(self, cid, name):
         with self._lock:
@@ -701,7 +708,9 @@ class Vault:
         """The collection goes, everything that was in it stays in the vault."""
         with self._lock:
             self._need()
+            from . import folders
             self.collections = [c for c in self.collections if c["id"] != cid]
+            folders.promote_children(self.collections, cid)
             for e in self.entries + self.offline:
                 if cid in (e.get("cols") or []):
                     e["cols"] = [x for x in e["cols"] if x != cid]

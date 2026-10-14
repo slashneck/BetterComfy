@@ -186,11 +186,18 @@ class History(QObject):
     def collection(self, cid):
         return next((c for c in self.collections if c["id"] == cid), None)
 
-    def add_collection(self, name, smart=None):
-        c = {"id": uuid.uuid4().hex[:8], "name": name.strip() or "Collection", "smart": smart}
+    def add_collection(self, name, smart=None, parent=None):
+        c = {"id": uuid.uuid4().hex[:8], "name": name.strip() or "Collection", "smart": smart, "parent": parent}
         self.collections.append(c)
+        from . import folders
+        self.collections = folders.ordered(self.collections)
         self._save_cols()
         return c
+
+    def set_collections(self, cols):
+        """A new order / new main folders and subfolders (from folders.move)."""
+        self.collections = list(cols)
+        self._save_cols()
 
     def rename_collection(self, cid, name):
         c = self.collection(cid)
@@ -199,8 +206,10 @@ class History(QObject):
             self._save_cols()
 
     def remove_collection(self, cid):
-        """The collection only - its pictures and videos stay."""
+        """The collection only - its pictures and videos stay, its subfolders become main folders."""
+        from . import folders
         self.collections = [c for c in self.collections if c["id"] != cid]
+        folders.promote_children(self.collections, cid)
         for e in self.items:
             if cid in (e.get("cols") or []):
                 self.update(e["id"], cols=[x for x in e["cols"] if x != cid])

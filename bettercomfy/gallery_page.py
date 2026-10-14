@@ -4,13 +4,13 @@ import os
 import threading
 from collections import deque
 
-from PySide6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
+from PySide6.QtCore import QEasingCurve, QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtGui import QColor, QDrag, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QSpinBox,  # noqa: F401 - QSpinBox.ButtonSymbols
+                               QListWidgetItem, QSpinBox, QStyledItemDelegate, QStyleOptionViewItem,
                                QMenu, QMessageBox, QPlainTextEdit, QVBoxLayout, QWidget)
 
-from . import icons, media, theme as T
+from . import folders, icons, media, theme as T
 from .config import cfg
 from .vault import vault
 from .components import _Count, _Loader
@@ -44,8 +44,26 @@ def _matches(e, f):
     return True
 
 
+FOLDER_MIME = "application/x-bettercomfy-folder"
+INDENT_ROLE = Qt.ItemDataRole.UserRole + 3     # how far an entry of the column is moved in (subfolders)
+GROUP_ROLE = Qt.ItemDataRole.UserRole + 4      # on a subfolder: the key of its main folder
+
+
+class _NavDelegate(QStyledItemDelegate):
+    """Draws an entry moved in by its indent (subfolders sit under their main folder)."""
+
+    def paint(self, p, opt, idx):
+        ind = idx.data(INDENT_ROLE) or 0
+        if ind:
+            o = QStyleOptionViewItem(opt)
+            o.rect = opt.rect.adjusted(int(ind), 0, 0, 0)
+            return super().paint(p, o, idx)
+        return super().paint(p, opt, idx)
+
+
 class Nav(QListWidget):
-    """The library column: fixed places, then your collections (drop pictures onto one to add them)."""
+    """The library column: fixed places, then your collections as folders (drop pictures onto one to add them, drag
+    a folder to put it somewhere else or into another one)."""
 
     def __init__(self, page):
         super().__init__()
@@ -53,15 +71,88 @@ class Nav(QListWidget):
         self.setFixedWidth(214)
         self.setSpacing(1)
         self.setAcceptDrops(True)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setItemDelegate(_NavDelegate(self))
+        self._hint = None                       # (rect, before | after | into) while a folder is dragged
         self.setStyleSheet(f"QListWidget {{ background: transparent; }} QListWidget::item {{ padding: 6px 8px; "
                            f"border-radius: 8px; color: {T.TEXT2}; }} QListWidget::item:selected {{ background: "
                            f"{T.SURFACE3}; color: {T.TEXT}; }}")
 
+    # ---- dragging a folder
+    def startDrag(self, actions):
+        it = self.currentItem()
+        key = str(it.data(Qt.ItemDataRole.UserRole) or "") if it else ""
+        if not key.startswith(("col:", "vcol:")):
+            return
+        md = QMimeData()
+        md.setData(FOLDER_MIME, key.encode("utf-8"))
+        dr = QDrag(self)
+        dr.setMimeData(md)
+        dr.setPixmap(self.viewport().grab(self.visualItemRect(it)))
+        dr.exec(Qt.DropAction.MoveAction)
+        self._set_hint(None)
+
+    def _set_hint(self, hint):
+        self._hint = hint
+        self.viewport().update()
+
+    def _folder_target(self, e):
+        """(source key, target key, before | after | into) for a folder dragged over the column, or None."""
+        src = bytes(e.mimeData().data(FOLDER_MIME)).decode("utf-8")
+        it = self.itemAt(e.position().toPoint())
+        key = str(it.data(Qt.ItemDataRole.UserRole) or "") if it else ""
+        pre = src.split(":", 1)[0] + ":"
+        if not key.startswith(pre) or key == src:
+            return None
+        r = self.visualItemRect(it)
+        y = e.position().toPoint().y() - r.top()
+        where = "before" if y < r.height() * 0.3 else "after" if y > r.height() * 0.7 else "into"
+        cols = self.page._folder_cols(pre)
+        if folders.move(cols, src.split(":", 1)[1], key.split(":", 1)[1], where) is None:
+            if where != "into":
+                return None
+            where = "after"                     # can't go in there: next to it then
+            if folders.move(cols, src.split(":", 1)[1], key.split(":", 1)[1], where) is None:
+                return None
+        return src, key, where, r
+
+    def dragLeaveEvent(self, e):
+        self._set_hint(None)
+        super().dragLeaveEvent(e)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not self._hint:
+            return
+        r, where = self._hint
+        p = QPainter(self.viewport())
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(T.accent(), 2))
+        if where == "into":
+            fill = QColor(T.accent())
+            fill.setAlpha(36)
+            p.setBrush(fill)
+            p.drawRoundedRect(QRectF(r).adjusted(2, 1, -2, -1), 8, 8)
+        else:
+            y = r.top() + 1 if where == "before" else r.bottom()
+            p.drawLine(QPointF(r.left() + 10, y), QPointF(r.right() - 6, y))
+            p.setBrush(T.accent())
+            p.drawEllipse(QPointF(r.left() + 8, y), 3, 3)
+        p.end()
+
     def dragEnterEvent(self, e):
+        if e.mimeData().hasFormat(FOLDER_MIME):
+            e.acceptProposedAction()
+            return
         e.acceptProposedAction() if e.source() is self.page.grid or _outside(e) else e.ignore()
 
     def dragMoveEvent(self, e):
+        if e.mimeData().hasFormat(FOLDER_MIME):
+            t = self._folder_target(e)
+            self._set_hint((t[3], t[2]) if t else None)
+            e.acceptProposedAction() if t else e.ignore()
+            return
         it = self.itemAt(e.position().toPoint())
         key = it.data(Qt.ItemDataRole.UserRole) if it else None
         if _outside(e):
@@ -83,6 +174,13 @@ class Nav(QListWidget):
         e.acceptProposedAction() if ok else e.ignore()
 
     def dropEvent(self, e):
+        if e.mimeData().hasFormat(FOLDER_MIME):
+            t = self._folder_target(e)
+            self._set_hint(None)
+            if t:
+                self.page._folder_drop(t[0], t[1], t[2])
+            e.acceptProposedAction()
+            return
         it = self.itemAt(e.position().toPoint())
         key = it.data(Qt.ItemDataRole.UserRole) if it else ""
         if _outside(e):
@@ -101,6 +199,13 @@ class Nav(QListWidget):
             c = self.page.history.collection(key[4:])
             self.page.app.toast(f"Added {len(ids)} to {c['name']}.", "ok")
         e.acceptProposedAction()
+
+
+def _hide(it):
+    try:
+        it.setHidden(True)
+    except RuntimeError:                        # the column was filled again meanwhile
+        pass
 
 
 def _gif_mark(p, s):
@@ -173,6 +278,7 @@ class GalleryPage(QWidget):
         self.history = app.history
         self.cur = None
         self.place = "all"
+        self._open = None               # the main folder whose subfolders are folded out ("col:id" / "vcol:id")
         self.flt = {}                   # model / lora filters on top of the place
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
@@ -469,14 +575,7 @@ class GalleryPage(QWidget):
         if cur == "vault":
             self.nav.setCurrentItem(it)
         if vault.is_open():
-            for c in vault.collections:
-                n = sum(1 for e in vault.entries if c["id"] in (e.get("cols") or []))
-                it = QListWidgetItem(icons.icon("layers", T.accent().name(), 15), f"   {c['name']}   {n}")
-                it.setData(Qt.ItemDataRole.UserRole, "vcol:" + c["id"])
-                it.setToolTip("A vault collection: drop vault pictures here to add them")
-                self.nav.addItem(it)
-                if cur == "vcol:" + c["id"]:
-                    self.nav.setCurrentItem(it)
+            self._folder_items("vcol:", vault.collections, vault.entries, 14, T.accent().name(), cur)
         if stores.all_stores():
             head("Drives")
             vis = list(items) + (list(vault.entries) if vault.is_open() else [])
@@ -508,22 +607,131 @@ class GalleryPage(QWidget):
             it.setFlags(Qt.ItemFlag.NoItemFlags)
             it.setForeground(QColor(T.TEXT3))
             self.nav.addItem(it)
-        for c in self.history.collections:
-            n = sum(1 for e in items if self._in_col(e, c))
-            it = QListWidgetItem(icons.icon("sparkle" if c.get("smart") else "layers", "#A1A1AA", 16),
-                                 f"{c['name']}   {n}")
-            it.setData(Qt.ItemDataRole.UserRole, "col:" + c["id"])
-            it.setToolTip("Smart collection: everything that fits its filter" if c.get("smart")
-                          else "Drop pictures here to add them")
-            self.nav.addItem(it)
-            if "col:" + c["id"] == cur:
-                self.nav.setCurrentItem(it)
+        self._folder_items("col:", self.history.collections, items, 0, "#A1A1AA", cur)
         self.nav.blockSignals(False)
 
-    def _in_col(self, e, c):
-        if c.get("smart"):
-            return _matches(e, c["smart"])
-        return c["id"] in (e.get("cols") or [])
+    def _folder_items(self, pre, cols, entries, indent, colour, cur):
+        """Main folders, and under each its subfolders (folded in unless it is the one open)."""
+        for c in folders.ordered(cols):
+            key = pre + c["id"]
+            n = sum(1 for e in entries if self._in_col(e, c, cols))
+            if folders.is_main(c):
+                kids = folders.children(cols, c["id"])
+                ic = "folder" if kids else ("sparkle" if c.get("smart") else "layers")
+                it = QListWidgetItem(icons.icon(ic, colour, 16), f"{c['name']}   {n}")
+                it.setData(INDENT_ROLE, indent)
+                tip = ("Smart collection: everything that fits its filter" if c.get("smart") else
+                       "Drop pictures here to add them")
+                if kids:
+                    tip += f"\n{len(kids)} subfolder{'s' if len(kids) != 1 else ''}: they fold out when you open it"
+                it.setToolTip(tip + "\nDrag it to put it somewhere else, or right click")
+            else:
+                it = QListWidgetItem(icons.icon("chevron_r", "#71717A", 14), f"{c['name']}   {n}")
+                it.setData(INDENT_ROLE, indent + 18)
+                it.setData(GROUP_ROLE, pre + c["parent"])
+                it.setToolTip("A subfolder: only what is in it. Drag it out or right click to move it")
+            it.setData(Qt.ItemDataRole.UserRole, key)
+            self.nav.addItem(it)
+            if not folders.is_main(c) and self._open != pre + c["parent"]:
+                it.setHidden(True)              # (only works once it is in the list)
+            if key == cur:
+                self.nav.setCurrentItem(it)
+
+    def _folder_cols(self, pre):
+        return self.history.collections if pre == "col:" else (vault.collections if vault.is_open() else [])
+
+    def _group(self, key):
+        """The main folder to fold out for a place: itself (with subfolders), or the main folder of a subfolder."""
+        key = str(key or "")
+        if not key.startswith(("col:", "vcol:")):
+            return None
+        pre, cid = key.split(":", 1)
+        pre += ":"
+        cols = self._folder_cols(pre)
+        c = folders.find(cols, cid)
+        if not c:
+            return None
+        if c.get("parent"):
+            return pre + c["parent"]
+        return key if folders.children(cols, cid) else None
+
+    def _sub_items(self, group):
+        if not group:
+            return []
+        return [self.nav.item(i) for i in range(self.nav.count()) if self.nav.item(i).data(GROUP_ROLE) == group]
+
+    def _fold(self, group):
+        """Folds the open main folder's subfolders in and the new one's out."""
+        if group == self._open:
+            return
+        old, new = self._sub_items(self._open), self._sub_items(group)
+        self._open = group
+        if not anims_on() or not self.isVisible():
+            for it in old:
+                it.setHidden(True)
+            for it in new:
+                it.setHidden(False)
+            return
+        if old:
+            self._slide(old, opening=False, then=lambda: [_hide(it) for it in old])
+        if new:
+            for it in new:
+                it.setSizeHint(QSize(0, 0))
+                it.setHidden(False)
+            self._slide(new, opening=True)
+
+    def _set_folders(self, pre, cols):
+        if pre == "col:":
+            self.history.set_collections(cols)
+        else:
+            vault.set_collections(cols)
+        self._open = self._group(self.place)
+        self._fill_nav()
+        self.fill()
+
+    def _folder_drop(self, src, tgt, where):
+        pre = src.split(":", 1)[0] + ":"
+        cols = folders.move(self._folder_cols(pre), src.split(":", 1)[1], tgt.split(":", 1)[1], where)
+        if cols is None:
+            self.app.toast("A folder with subfolders stays a main folder.", "info")
+            return
+        self._set_folders(pre, cols)
+
+    def _folder_menu(self, m, pre, c):
+        """Moving a folder: up, down, into a main folder, out to the main folders."""
+        cols = self._folder_cols(pre)
+        m.addSeparator()
+        for d, text, ic in ((-1, "Move up", "up"), (1, "Move down", "down")):
+            new = folders.step(cols, c["id"], d)
+            a = m.addAction(icons.icon(ic, "#A1A1AA", 16), text)
+            a.setEnabled(new is not None)
+            a.triggered.connect(lambda _=False, new=new: self._set_folders(pre, new))
+        if c.get("parent"):
+            new = folders.move(cols, c["id"], c["parent"], "after")
+            m.addAction(icons.icon("layers", "#A1A1AA", 16), "Make it a main folder").triggered.connect(
+                lambda: self._set_folders(pre, new))
+        mains = [x for x in folders.ordered(cols) if folders.is_main(x) and x["id"] != c["id"]
+                 and x["id"] != c.get("parent")]
+        sub = m.addMenu(icons.icon("folder", "#A1A1AA", 16), "Put into")
+        if folders.children(cols, c["id"]):
+            sub.setEnabled(False)
+            sub.setToolTip("It has subfolders itself")
+        elif not mains:
+            sub.setEnabled(False)
+        for x in mains:
+            new = folders.move(cols, c["id"], x["id"], "into")
+            sub.addAction(x["name"]).triggered.connect(lambda _=False, new=new: self._set_folders(pre, new))
+
+    def _in_col(self, e, c, cols=None):
+        """In the folder - for a main folder also in any of its subfolders."""
+        cols = self.history.collections if cols is None else cols
+        for x in [c] + (folders.children(cols, c["id"]) if folders.is_main(c) else []):
+            if x.get("smart"):
+                if _matches(e, x["smart"]):
+                    return True
+            elif x["id"] in (e.get("cols") or []):
+                return True
+        return False
 
     def _get(self, eid):
         return self.history.get(eid) or (vault.get(eid) if vault.is_open() else None)
@@ -548,7 +756,8 @@ class GalleryPage(QWidget):
 
     def _vcol_items(self):
         return [self.nav.item(i) for i in range(self.nav.count())
-                if str(self.nav.item(i).data(Qt.ItemDataRole.UserRole) or "").startswith("vcol:")]
+                if str(self.nav.item(i).data(Qt.ItemDataRole.UserRole) or "").startswith("vcol:")
+                and not self.nav.item(i).isHidden()]
 
     def _slide(self, items, opening, then=None):
         """The vault's collections grow out of (or shrink back into) the Vault entry, one after the other."""
@@ -621,7 +830,8 @@ class GalleryPage(QWidget):
         if p == "vault":
             return bool(e.get("vault")) and not self._filed(e)
         if p.startswith("vcol:"):
-            return bool(e.get("vault")) and p[5:] in (e.get("cols") or [])
+            c = vault.collection(p[5:])
+            return bool(e.get("vault")) and bool(c) and self._in_col(e, c, vault.collections)
         if p in ("fav", "marked"):
             return bool(e.get(p))
         if p in ("image", "video"):
@@ -634,17 +844,19 @@ class GalleryPage(QWidget):
     def _go(self, key):
         if not key:
             return
+        self._fold(self._group(key))
         self.place = key
         self.fill()
 
-    def _new_collection(self, ids=None):
-        name, ok = QInputDialog.getText(self, "New collection", "Name:")
+    def _new_collection(self, ids=None, parent=None):
+        name, ok = QInputDialog.getText(self, "New subfolder" if parent else "New collection", "Name:")
         if not ok or not name.strip():
             return None
-        c = self.history.add_collection(name)
+        c = self.history.add_collection(name, parent=parent)
         if ids:
             self.history.set_in_collection(ids, c["id"], True)
         self.place = "col:" + c["id"]
+        self._open = self._group(self.place)
         self._fill_nav()
         self.fill()
         return c
@@ -663,9 +875,13 @@ class GalleryPage(QWidget):
             if c:
                 m = QMenu(self)
                 m.addAction("Rename…").triggered.connect(lambda: self._rename_vcol(c))
+                if folders.is_main(c):
+                    m.addAction(icons.icon("plus", "#A1A1AA", 16), "New subfolder…").triggered.connect(
+                        lambda: self._new_vcol(parent=c["id"]))
+                self._folder_menu(m, "vcol:", c)
+                m.addSeparator()
                 m.addAction(icons.icon("trash", "#FF8A8A", 16), "Delete the collection (keeps its pictures)"
                             ).triggered.connect(lambda: self._del_vcol(c))
-                m.addSeparator()
                 m.addAction(icons.icon("plus", "#A1A1AA", 16), "New vault collection…").triggered.connect(
                     lambda: self._new_vcol())
                 m.exec(self.nav.mapToGlobal(pos))
@@ -675,19 +891,25 @@ class GalleryPage(QWidget):
         c = self.history.collection(key[4:])
         m = QMenu(self)
         m.addAction("Rename…").triggered.connect(lambda: self._rename(c))
+        if folders.is_main(c):
+            m.addAction(icons.icon("plus", "#A1A1AA", 16), "New subfolder…").triggered.connect(
+                lambda: self._new_collection(parent=c["id"]))
+        self._folder_menu(m, "col:", c)
+        m.addSeparator()
         m.addAction(icons.icon("trash", "#FF8A8A", 16), "Delete the collection (keeps its pictures)").triggered.connect(
             lambda: self._del_collection(c))
         m.exec(self.nav.mapToGlobal(pos))
 
     # ---- vault collections
-    def _new_vcol(self, ids=None):
-        name, ok = QInputDialog.getText(self, "New vault collection", "Name:")
+    def _new_vcol(self, ids=None, parent=None):
+        name, ok = QInputDialog.getText(self, "New subfolder" if parent else "New vault collection", "Name:")
         if not ok or not name.strip() or not vault.is_open():
             return None
-        c = vault.add_collection(name)
+        c = vault.add_collection(name, parent=parent)
         if ids:
             vault.set_in_collection(ids, c["id"], True)
         self.place = "vcol:" + c["id"]
+        self._open = self._group(self.place)
         self._fill_nav()
         self.fill()
         return c
@@ -699,8 +921,9 @@ class GalleryPage(QWidget):
             self._fill_nav()
 
     def _del_vcol(self, c):
+        kids = " Its subfolders become main folders." if folders.children(vault.collections, c["id"]) else ""
         if QMessageBox.question(self, "Collection", f"Delete the collection '{c['name']}'? Its pictures and videos stay "
-                                                    "in the vault.") == QMessageBox.StandardButton.Yes:
+                                                    f"in the vault.{kids}") == QMessageBox.StandardButton.Yes:
             if self.place == "vcol:" + c["id"]:
                 self.place = "vault"
             vault.remove_collection(c["id"])
@@ -712,9 +935,9 @@ class GalleryPage(QWidget):
         if not entries or not vault.is_open():
             return
         m = QMenu(self)
-        for c in vault.collections:
+        for c in folders.ordered(vault.collections):
             inside = all(c["id"] in (e.get("cols") or []) for e in entries)
-            a = m.addAction(c["name"])
+            a = m.addAction(("      ↳ " if c.get("parent") else "") + c["name"])
             a.setCheckable(True)
             a.setChecked(inside)
             a.triggered.connect(lambda _=False, c=c, inside=inside: self._vcol_set(entries, c, not inside))
@@ -736,8 +959,9 @@ class GalleryPage(QWidget):
             self.history.rename_collection(c["id"], name)
 
     def _del_collection(self, c):
+        kids = " Its subfolders become main folders." if folders.children(self.history.collections, c["id"]) else ""
         if QMessageBox.question(self, "Collection", f"Delete the collection '{c['name']}'? Its pictures and videos stay "
-                                                    "in the gallery.") == QMessageBox.StandardButton.Yes:
+                                                    f"in the gallery.{kids}") == QMessageBox.StandardButton.Yes:
             if self.place == "col:" + c["id"]:
                 self.place = "all"
             self.history.remove_collection(c["id"])
@@ -1308,10 +1532,10 @@ class GalleryPage(QWidget):
         if entries[0].get("vault"):
             return self._vcol_menu([e for e in entries if e.get("vault")], pos)
         m = QMenu(self)
-        manual = [c for c in self.history.collections if not c.get("smart")]
+        manual = [c for c in folders.ordered(self.history.collections) if not c.get("smart")]
         for c in manual:
             inside = all(c["id"] in (e.get("cols") or []) for e in entries)
-            a = m.addAction(c["name"])
+            a = m.addAction(("      ↳ " if c.get("parent") else "") + c["name"])
             a.setCheckable(True)
             a.setChecked(inside)
             a.triggered.connect(lambda _=False, c=c, inside=inside: self.history.set_in_collection(
