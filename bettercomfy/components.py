@@ -977,11 +977,16 @@ class GenerateBar(QWidget):
 class _Loader(QObject):
     done = Signal(str, object, float)
 
-    def load(self, key, path, entry=None):
-        """Frames of a video file - or, with a vault entry, of its decrypted bytes (in memory only)."""
+    def load(self, key, path, entry=None, gif=None):
+        """Frames of a video file - or, with a vault entry, of its decrypted bytes (in memory only). gif: the
+        entry of a GIF, played at its speed (Settings, or its own)."""
         def work():
             try:
-                if entry is not None:
+                if gif is not None:
+                    from .vault import vault
+                    frames = media.gif_frames(vault.read(gif) if gif.get("vault") else path, max_h=1080)
+                    fps = media.gif_fps(gif)
+                elif entry is not None:
                     from .vault import vault
                     frames, fps = media.read_video_bytes(vault.read(entry), entry.get("w"), entry.get("h"), max_h=1080,
                                                          fps=entry.get("fps") or 16)

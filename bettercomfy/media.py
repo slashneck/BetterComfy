@@ -414,6 +414,51 @@ def join_clips(paths, tail=None, tail_fps=None, head=None):
     return allf, fps or 16.0
 
 
+def gif_frames(src, max_h=1080, limit=3000):
+    """Every frame of a GIF (a path or its bytes, e.g. decrypted from the vault) as RGB arrays. A GIF with a single
+    frame gives an empty list (it is a still picture)."""
+    im = Image.open(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else src)
+    if getattr(im, "n_frames", 1) < 2:
+        return []
+    frames = []
+    try:
+        while len(frames) < limit:
+            f = im.convert("RGB")
+            if f.height > max_h:
+                f = f.resize((max(1, f.width * max_h // f.height), max_h), Image.LANCZOS)
+            frames.append(np.asarray(f))
+            im.seek(im.tell() + 1)
+    except EOFError:
+        pass
+    return frames
+
+
+def is_gif(entry):
+    """A GIF in the gallery or the vault (they come in as pictures)."""
+    return (entry.get("fmt") or "").lower() == "gif" or (entry.get("file") or "").lower().endswith(".gif")
+
+
+def gif_fps(entry=None):
+    """The speed a GIF plays at: its own (set under it in the gallery), else Settings (Play GIFs at), else the speed
+    new videos are made at (16 fps from WAN, times Smoothing)."""
+    from .config import cfg
+    if entry and entry.get("gif_fps"):
+        return float(entry["gif_fps"])
+    if cfg.get("gif_fps"):
+        return float(cfg.get("gif_fps"))
+    return float(default_gif_fps())
+
+
+def default_gif_fps():
+    from .config import cfg
+    from .workflows import VIDEO_DEFAULT, WAN_FPS
+    interp = (cfg.get("video_state") or {}).get("interp", VIDEO_DEFAULT.get("interp", 1))
+    try:
+        return WAN_FPS * max(1, int(interp))
+    except (TypeError, ValueError):
+        return WAN_FPS
+
+
 def last_frame(path):
     frames, _ = read_video(path, max_h=100000)
     return frames[-1] if frames else None

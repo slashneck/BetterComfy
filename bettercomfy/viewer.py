@@ -6,7 +6,7 @@ from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer, QVariantAn
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from . import icons, theme as T
+from . import icons, media, theme as T
 from .components import _Loader
 from .widgets import anims_on, nice_name
 
@@ -100,6 +100,11 @@ class Viewer(QWidget):
                 pass
             if e.get("kind") == "video":
                 self.loader.load(e["id"], None, e)
+            elif media.is_gif(e):
+                self.loader.load(e["id"], None, gif=e)
+        elif media.is_gif(e):
+            self.pm = QPixmap(e["file"])
+            self.loader.load(e["id"], e["file"], gif=e)
         elif e.get("kind") == "video":
             self.pm = QPixmap(e.get("thumb") or "")
             self.loader.load(e["id"], e["file"])

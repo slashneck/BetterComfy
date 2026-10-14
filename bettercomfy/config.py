@@ -58,8 +58,9 @@ DEFAULTS = {
     "market_sort": 0,
     "market_nsfw": False,
     "market_favs": [],
-    "civitai_key": None,
-    "stores": [],                     # drives for pictures and vault files: [{id, path, serial, label, kind}]              # the optional API key, encrypted for this Windows account (DPAPI)
+    "civitai_key": None,              # the optional API key, encrypted for this Windows account (DPAPI)
+    "stores": [],                     # drives for pictures and vault files: [{id, path, serial, label, kind}]
+    "gif_fps": None,                  # GIFs play at (None: the speed new videos are made at)
     "comfy_tidy": True,               # after each job: its uploads, temporary copies and history entry in ComfyUI go
     "forget_prompts": True,           # deleting a picture also takes its prompt out of the prompt history
     "collections_leave": True,        # a picture put into a collection no longer shows in All

@@ -5,7 +5,7 @@ import threading
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
 from PySide6.QtWidgets import QColorDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
-    QPushButton, QSizePolicy, QVBoxLayout, QWidget
+    QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from . import comfy, icons, system, theme as T
 from .config import APP_NAME, BASE, VERSION, cfg, resource
@@ -394,6 +394,17 @@ class SettingsPage(QWidget):
         set_combo(self.start_page, cfg.get("start_page"))
         self.start_page.currentIndexChanged.connect(lambda _=0: cfg.set("start_page", self.start_page.currentData()))
         c.add(field("Open on", self.start_page, label_w=90))
+        from . import media
+        self.gif_fps = QSpinBox()
+        self.gif_fps.setRange(1, 120)
+        self.gif_fps.setSuffix(" fps")
+        self.gif_fps.setFixedWidth(110)
+        self.gif_fps.setValue(int(cfg.get("gif_fps") or media.default_gif_fps()))
+        self.gif_fps.valueChanged.connect(lambda v: cfg.set("gif_fps", int(v)))
+        c.add(field("Play GIFs at", hrow(self.gif_fps, None),
+                    "GIFs play in a loop in the gallery and the big viewer at this speed. At first the speed new "
+                    "videos are made at. A GIF can have its own: click the number under it in the gallery.",
+                    label_w=90))
         cards.add(c)
         self._paint_swatches()
 
@@ -417,9 +428,9 @@ class SettingsPage(QWidget):
 
         # ---------------------------------------------------------------- updates
         c = Card("Updates")
-        self.t_upd = ToggleRow("Look for new versions", "Asks GitHub every few hours. Apart from the prompt helper "
-                                                       "download you start yourself, that is the only thing Better "
-                                                       "Comfy does online.", cfg.get("check_updates"),
+        self.t_upd = ToggleRow("Look for new versions", "Asks GitHub every few hours. Apart from downloads you "
+                                                       "start yourself, Fetch and the Market (Civitai), that is the "
+                                                       "only thing Better Comfy does online.", cfg.get("check_updates"),
                                lambda v: cfg.set("check_updates", v))
         self.upd_status = label("", "Muted", wrap=True)
         self.upd_check = button("Check now", lambda: self.app.updates.check(), None, "refresh")

@@ -7,13 +7,13 @@ from collections import deque
 from PySide6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem,
+                               QListWidgetItem, QSpinBox,  # noqa: F401 - QSpinBox.ButtonSymbols
                                QMenu, QMessageBox, QPlainTextEdit, QVBoxLayout, QWidget)
 
-from . import icons, theme as T
+from . import icons, media, theme as T
 from .config import cfg
 from .vault import vault
-from .components import _Loader
+from .components import _Count, _Loader
 from .widgets import (ChipBox, Combo, FileList, Player, Segmented, anims_on, button, chip, hrow, icon_button, label,
                       nice_name, set_combo)
 from . import stores
@@ -101,6 +101,26 @@ class Nav(QListWidget):
             c = self.page.history.collection(key[4:])
             self.page.app.toast(f"Added {len(ids)} to {c['name']}.", "ok")
         e.acceptProposedAction()
+
+
+def _gif_mark(p, s):
+    """A small "GIF" label in the bottom left corner of a tile."""
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(0, 0, 0, 150))
+    p.drawRoundedRect(QRectF(14, s - 50, 66, 36), 12, 12)
+    f = p.font()
+    f.setPixelSize(20)
+    f.setBold(True)
+    p.setFont(f)
+    p.setPen(QColor("#FFFFFF"))
+    p.drawText(QRectF(14, s - 50, 66, 36), Qt.AlignmentFlag.AlignCenter, "GIF")
+    p.setPen(Qt.PenStyle.NoPen)
+
+
+def icons_label(name):
+    lb = QLabel()
+    lb.setPixmap(icons.pixmap(name, 14, "#A1A1AA"))
+    return lb
 
 
 def _outside(e):
@@ -285,6 +305,29 @@ class GalleryPage(QWidget):
         self._rows = {}
         self.player.message("Pick something", "Its settings show here.")
         sv.addWidget(self.player, 1)
+        # a GIF plays in a loop: one small line below it, the number (white) can be clicked and typed into
+        self.gif_fps = _Count()
+        self.gif_fps.setRange(1, 120)
+        self.gif_fps.setSuffix(" fps")
+        self.gif_fps.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.gif_fps.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.gif_fps.setFixedSize(54, 20)
+        self.gif_fps.setCursor(Qt.CursorShape.IBeamCursor)
+        self.gif_fps.setStyleSheet(f"QSpinBox {{ background: transparent; border: none; border-radius: 4px; padding: 0; "
+                                   f"color: {T.TEXT}; font-weight: 600; }} QSpinBox:hover {{ background: {T.SURFACE3}; }}"
+                                   f" QSpinBox:focus {{ background: {T.SURFACE3}; }}")
+        self.gif_fps.setToolTip("Click and type a speed for this GIF (Enter). Settings, Play GIFs at sets it for all.")
+        self.gif_fps.editingFinished.connect(self._gif_fps_set)
+        self.gif_note = label("", "Faint")
+        self.gif_reset = label(f'<a href="#" style="color: {T.TEXT3}; text-decoration: underline;">use setting</a>',
+                               "Faint")
+        self.gif_reset.setTextFormat(Qt.TextFormat.RichText)
+        self.gif_reset.linkActivated.connect(lambda _l: self._gif_fps_reset())
+        self.gif_reset.setToolTip("Back to the speed from Settings (Play GIFs at)")
+        self.gif_row = hrow(label("GIF at", "Faint"), self.gif_fps, self.gif_note, self.gif_reset, None, spacing=4)
+        self.gif_row.setFixedHeight(22)
+        self.gif_row.hide()
+        sv.addWidget(self.gif_row)
         self.fav_btn = icon_button("star", lambda: self._flag("fav"), "Favourite (F)", size=17)
         self.mark_btn = icon_button("trash", lambda: self._flag("marked"), "Mark for deletion (X)", size=17)
         self.col_btn = icon_button("layers", self._col_menu, "Collections", size=17)
@@ -822,6 +865,8 @@ class GalleryPage(QWidget):
                 p.setBrush(QColor(0, 0, 0, 150))
                 p.drawEllipse(QPointF(s - 34, s - 34), 22, 22)
                 p.drawPixmap(QPointF(s - 49, s - 49), icons.pixmap("usb", 30, "#FFFFFF", dpr=1.0))
+            if media.is_gif(e):
+                _gif_mark(p, s)
             p.end()
             out.setDevicePixelRatio(2.0)
             self._icons[key] = QIcon(out)
@@ -916,6 +961,9 @@ class GalleryPage(QWidget):
         if e.get("kind") == "video":
             p.drawEllipse(QPointF(34, s - 34), 22, 22)
             p.drawPixmap(QPointF(21, s - 47), icons.pixmap("play", 26, "#FFFFFF", dpr=1.0))
+        if media.is_gif(e):
+            _gif_mark(p, s)
+            p.setBrush(QColor(0, 0, 0, 150))
         if e.get("marked"):
             p.setBrush(QColor(T.BAD))
             p.drawEllipse(QPointF(34, 34), 22, 22)
@@ -1076,7 +1124,8 @@ class GalleryPage(QWidget):
         self.name.setText((e.get("name") or f"Private {'video' if e.get('kind') == 'video' else 'picture'}")
                          if e.get("vault") else nice_name(e["file"]))
         p = e.get("params") or {}
-        bits = [f"{e.get('w')} × {e.get('h')}", f"seed {e.get('seed')}", nice_name(e.get("model") or "")]
+        bits = [f"{e.get('w')} × {e.get('h')}", f"seed {e.get('seed')}" if e.get("seed") is not None else "",
+                nice_name(e.get("model") or "")]
         if e.get("kind") == "video":
             bits[1:1] = [f"{e.get('seconds')} s · {int(e.get('fps', 16))} fps · {e.get('loop', '')}"]
         else:
@@ -1091,6 +1140,8 @@ class GalleryPage(QWidget):
             bits.append(f"made in {e['took']:.0f}s")
         self.meta.setText("  ·  ".join(b for b in bits if b))
         self.prompt.setPlainText(e.get("final_prompt") or e.get("prompt") or "")
+        gif = media.is_gif(e)
+        self.gif_row.hide()
         if e.get("vault"):
             if e["kind"] == "video":
                 self.player.message("Loading…")
@@ -1099,6 +1150,11 @@ class GalleryPage(QWidget):
                 pm = QPixmap()
                 pm.loadFromData(vault.read(e))
                 self.player.show_image(pm, "In the vault")
+                if gif:
+                    self.loader.load(e["id"], None, gif=e)
+        elif gif:
+            self.player.show_image(e["file"])
+            self.loader.load(e["id"], e["file"], gif=e)
         elif e["kind"] == "video":
             self.player.show_image(e.get("thumb") or "", "Loading…", fade=False)
             self.loader.load(e["id"], e["file"])
@@ -1118,6 +1174,45 @@ class GalleryPage(QWidget):
     def _loaded(self, key, frames, fps):
         if self.cur and self.cur["id"] == key and frames:
             self.player.play(frames, fps, f"{fps:.0f} fps")
+            if media.is_gif(self.cur):
+                self._gif_ui(fps)
+
+    # ---- GIFs: their speed
+    def _gif_ui(self, fps):
+        e = self.cur
+        self.gif_fps.blockSignals(True)
+        self.gif_fps.setValue(int(round(fps)))
+        self.gif_fps.blockSignals(False)
+        own = bool(e.get("gif_fps"))
+        self.gif_note.setText("· its own" if own else "· from Settings")
+        self.gif_reset.setVisible(own)
+        self.gif_row.show()
+
+    def _gif_fps_set(self):
+        e = self.cur
+        if not e or not media.is_gif(e):
+            return
+        v = int(self.gif_fps.value())
+        if v == int(round(media.gif_fps(e))):
+            return
+        self._gif_store(e, v)
+
+    def _gif_fps_reset(self):
+        if self.cur and media.is_gif(self.cur):
+            self._gif_store(self.cur, None)
+
+    def _gif_store(self, e, v):
+        """Its own speed (None: the one from Settings), kept with it - in the vault's encrypted list for vault ones."""
+        if e.get("vault"):
+            vault.update(e["id"], gif_fps=v)
+        else:
+            self.history.update(e["id"], gif_fps=v)
+            e = self.history.get(e["id"]) or e
+        self.cur = e
+        fps = media.gif_fps(e)
+        if self.player.frames and len(self.player.frames) > 1:
+            self.player.play(self.player.frames, fps, f"{fps:.0f} fps")
+        self._gif_ui(fps)
 
     def _selected(self):
         sel = [self._get(i.data(Qt.ItemDataRole.UserRole)) for i in self.grid.selectedItems()]
