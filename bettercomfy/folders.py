@@ -1,4 +1,4 @@
-"""Collections as folders: main folders, each with its own subfolders (one level, so the column stays tidy), in an
+"""Collections with sub-collections: each collection can hold its own (one level, so the column stays tidy), in an
 order you set. Works on the list of collections of the gallery and of the vault alike: [{"id", "name", "parent"}]."""
 
 
@@ -11,7 +11,7 @@ def children(cols, cid):
 
 
 def family(cols, cid):
-    """The folder and its subfolders (a main folder shows everything in them)."""
+    """The collection and its sub-collections (a collection shows everything in them)."""
     return {cid} | {c["id"] for c in children(cols, cid)}
 
 
@@ -20,8 +20,8 @@ def is_main(c):
 
 
 def ordered(cols):
-    """Main folders in their order, each followed by its subfolders. A subfolder whose main folder is gone becomes a
-    main folder."""
+    """Collections in their order, each followed by its sub-collections. A sub-collection whose collection is gone
+    becomes a collection of its own."""
     ids = {c["id"] for c in cols}
     out = []
     for c in cols:
@@ -35,13 +35,14 @@ def ordered(cols):
 
 
 def _block(cols, c):
-    """A folder with its subfolders (they move together)."""
+    """A collection with its sub-collections (they move together)."""
     return [c] + (children(cols, c["id"]) if is_main(c) else [])
 
 
 def move(cols, cid, target, where):
-    """A folder before / after another one, or into it (where: before | after | into). Returns the new list, or None
-    when that can't be (a folder with subfolders into another one, a subfolder into a subfolder, onto itself)."""
+    """A collection before / after another one, or into it (where: before | after | into). Returns the new list, or
+    None when that can't be (one with sub-collections into another, a sub-collection into a sub-collection, onto
+    itself)."""
     cols = ordered(list(cols))
     src, tgt = find(cols, cid), find(cols, target)
     if not src or not tgt or src is tgt:
@@ -53,7 +54,7 @@ def move(cols, cid, target, where):
     else:
         parent = tgt.get("parent")
         if parent and children(cols, cid):
-            return None                 # a folder with subfolders stays a main folder
+            return None                 # one with sub-collections stays a collection of its own
         if parent == cid:
             return None
     block = _block(cols, src)
@@ -72,7 +73,7 @@ def move(cols, cid, target, where):
 
 
 def step(cols, cid, d):
-    """One place up (d=-1) or down (d=1) among the folders next to it (same main folder, or the main folders)."""
+    """One place up (d=-1) or down (d=1) among the ones next to it (in the same collection, or the collections)."""
     cols = ordered(list(cols))
     c = find(cols, cid)
     if not c:
@@ -86,7 +87,7 @@ def step(cols, cid, d):
 
 
 def promote_children(cols, cid):
-    """A main folder is deleted: its subfolders become main folders."""
+    """A collection is deleted: its sub-collections become collections of their own."""
     for c in cols:
         if c.get("parent") == cid:
             c["parent"] = None
