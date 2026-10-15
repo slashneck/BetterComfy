@@ -72,7 +72,7 @@ DEFAULTS = {
     "helper_threads": 0,              # 0 = half the processor's threads
     "tag_suggest": "auto",            # auto (for tag based models) | on | off
     "helper_tag_model": "",           # the tag model of the prompt helper (TIPO)
-    "sentences_by": "auto",           # auto: TIPO writes sentence prompts when it is set up | writer: the writing model
+    "sentences_by": "writer",         # writer: the writing model writes sentence prompts | tipo: the tag model
     "tipo_rating": "auto",            # what the tag model may add: auto (like the prompt) | safe | sensitive | nsfw | explicit
     "tag_blacklist": None,            # tags never suggested or added by the helper; None = the starting list
     "vault_autolock": 10,             # minutes without mouse / keyboard, 0 = never

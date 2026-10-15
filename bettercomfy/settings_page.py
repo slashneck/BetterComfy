@@ -317,12 +317,13 @@ class SettingsPage(QWidget):
                     label_w=110),
               field("Tag suggestions", self.tag_mode, "While typing a prompt: Tab or Enter takes a suggestion.",
                     label_w=110),
-              field("Sentences by", Segmented([("auto", "TIPO", "The tag model writes sentence prompts too (when it "
-                                                                 "is set up): more concrete, about a second"),
-                                               ("writer", "Writing model", "The Qwen model writes them: slower, freer "
-                                                                           "wording")],
-                                              lambda v: cfg.set("sentences_by", v), cfg.get("sentences_by", "auto"),
-                                              height=30),
+              field("Sentences by", Segmented([("writer", "Writing model", "The writing model writes them: it keeps "
+                                                                           "every person and act you name, takes "
+                                                                           "longer"),
+                                               ("tipo", "TIPO", "The tag model writes them: about a second, but it "
+                                                                "follows loosely")],
+                                              lambda v: cfg.set("sentences_by", v),
+                                              "tipo" if cfg.get("sentences_by") == "tipo" else "writer", height=30),
                     "Video motion is always written by the writing model.", label_w=110))
         cards.add(c)
         self.helper_status()

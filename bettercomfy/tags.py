@@ -186,12 +186,15 @@ def set_blacklist(items):
 # ------------------------------------------------------------------------------------------------ reading prompts
 
 PEOPLE = re.compile(r"^(\d\+?(girl|boy|other)s?|multiple (girls|boys|others)|no humans|solo)$")
-_COUNT_WORDS = [(r"\b(two|2) girls\b", "2girls"), (r"\b(two|2) boys\b", "2boys"),
-                (r"\b(three|3) girls\b", "3girls"), (r"\b(a|one|1|single) (girl|woman|lady)\b", "1girl"),
-                (r"\b(a|one|1|single) (boy|man|guy)\b", "1boy"), (r"\b(girl|woman)\b", "1girl"),
-                (r"\b(boy|man)\b", "1boy")]
+# how many women and how many men the words name (one count each, the most exact first)
+_COUNT_WORDS = [(r"\b(three|3) (girls|women|ladies)\b", "3girls"), (r"\b(two|2) (girls|women|ladies)\b", "2girls"),
+                (r"\b(three|3) (boys|men|guys)\b", "3boys"), (r"\b(two|2) (boys|men|guys)\b", "2boys"),
+                (r"\b(a|one|1|single) (girl|woman|lady)\b", "1girl"), (r"\b(a|one|1|single) (boy|man|guy)\b", "1boy"),
+                (r"\b(girl|woman|lady)\b", "1girl"), (r"\b(boy|man|guy)\b", "1boy")]
 _STOP = {"a", "an", "the", "and", "or", "with", "in", "on", "at", "of", "to", "her", "his", "their", "its", "is", "are",
-         "while", "from", "by", "for", "as", "into", "over", "under", "behind", "near", "very", "some", "one", "two"}
+         "while", "from", "by", "for", "as", "into", "over", "under", "behind", "near", "very", "some", "one", "two",
+         # people words: already counted above (1girl, 2boys ...), not tags of their own
+         "man", "men", "woman", "women", "guy", "guys", "lady", "ladies", "girl", "girls", "boy", "boys", "three"}
 EXPLICIT = {"nsfw", "explicit", "nude", "naked", "completely nude", "nipples", "pussy", "penis", "sex", "cum",
             "vaginal", "anal", "oral", "fellatio", "paizuri", "masturbation", "topless", "bottomless", "pubic hair",
             "erection", "areolae", "uncensored", "spread legs", "orgasm", "ejaculation", "cunnilingus", "handjob",
@@ -236,8 +239,10 @@ def extract(text, limit=40):
     low = _plain(text)
     out = []
     for pat, tag in _COUNT_WORDS:
-        if re.search(pat, low) and not any(PEOPLE.match(t) for t in out):
+        sex = "girl" if "girl" in tag else "boy"
+        if re.search(pat, low) and not any(PEOPLE.match(t) and sex in t for t in out):
             out.append(tag)
+    out.sort(key=lambda t: "boy" in t)                 # women first, the way Danbooru counts them
     words = re.findall(r"[a-z0-9'\-]+", low)
     counts = _counts()
     i = 0
