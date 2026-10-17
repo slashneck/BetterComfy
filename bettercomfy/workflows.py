@@ -168,7 +168,7 @@ IMAGE_PRESETS = [
     ("fast", "Fast", "Good everyday quality, quick.", 18, 0.9, "euler_ancestral", "normal", None),
     ("balanced", "Balanced", "Cleaner details, still quick.", 26, 1.0, "dpmpp_2m", "karras", None),
     ("quality", "Quality", "Upscaled pass for crisp detail.", 28, 1.0, "dpmpp_2m", "karras", (1.5, 14, 0.40)),
-    ("best", "Best", "Maximum detail - slow on 8 GB.", 34, 1.0, "dpmpp_2m_sde", "karras", (1.5, 20, 0.45)),
+    ("best", "Best", "Maximum detail - the slowest.", 34, 1.0, "dpmpp_2m_sde", "karras", (1.5, 20, 0.45)),
 ]
 IMAGE_PRESET = {p[0]: p for p in IMAGE_PRESETS}
 # speed models (Lightning / Hyper / DMD2 / Turbo): few steps, low guidance

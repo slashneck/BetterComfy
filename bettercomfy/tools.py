@@ -334,7 +334,7 @@ class UpscaleDialog(QDialog):
         mp = fw * fh / 1e6
         t = f"Result: {fw} × {fh}  ({mp:.1f} MP)."
         if detail and mp > 4.5:
-            t += "  Very big for a detail pass on 8 GB - it will be slow; 'Clean' or a smaller size is quicker."
+            t += "  Very big for a detail pass - it will be slow; 'Clean' or a smaller size is quicker."
         elif detail:
             t += "  Uses the picture's model, prompt, LoRAs and seed."
         self.info.setText(t)

@@ -122,7 +122,8 @@ class SettingsPage(QWidget):
         self.reserve = Slider(0, 4, 0.1, 1, float(cfg.get("reserve_vram") or 0),
                               lambda v: cfg.set("reserve_vram", round(v, 1)), " GB", width=74)
         c.add(field("Keep free", self.reserve, "Graphics memory kept free. On Windows a full card spills into normal "
-                                               "memory and gets many times slower - 1 - 1.5 GB is good for 8 GB.",
+                                               "memory and gets many times slower - about 1 to 1.5 GB is a good "
+                                               "start.",
                     label_w=90))
         self.t_fast = ToggleRow("Faster maths (fp16 accumulation)", "Faster, with no visible difference",
                                 cfg.get("fast_mode"), lambda v: cfg.set("fast_mode", v))
