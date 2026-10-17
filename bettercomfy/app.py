@@ -143,6 +143,10 @@ class Window(QMainWindow):
         self.setWindowIcon(QIcon(resource("assets", "icon.ico")))
         self.history = History()
         self.history.compact()
+        if not cfg.get("perf_defaults_1"):
+            # faster maths was off by default before: no visible difference, about 15 to 20 % faster
+            cfg.set("fast_mode", True)
+            cfg.set("perf_defaults_1", True)
         from . import stores
         stores.watcher.start()
         self.history.refresh_stores()

@@ -498,16 +498,34 @@ def build_image(p, plan, seed, client=None, init_name=None, upscalers=None, list
 
 WAN_FPS = 16
 
-# key, name, line, pixel budget, steps, of them motion, smoothing
+# key, name, line, pixel budget it is made at, steps (speed models), of them motion, smoothing, pixel budget the
+# frames are enlarged to with an upscale model afterwards (None: as made). Speed models (Lightning / lightx2v) are
+# made for 4 steps: more barely changes the picture, so the presets differ by size instead.
 VIDEO_PRESETS = [
-    ("draft", "Ultra Fast", "Quick look at the motion - small, not smoothed.", 320 * 480, 4, 2, 1),
-    ("fast", "Fast", "Small and quick, smoothed to 32 fps.", 384 * 576, 4, 2, 2),
-    ("balanced", "Balanced", "Sharper, a little slower.", 512 * 768, 6, 3, 2),
-    ("quality", "Quality", "Sharp details - slow on 8 GB.", 576 * 864, 8, 4, 2),
-    ("best", "Best", "As sharp as it gets - needs lots of memory.", 720 * 1080, 10, 5, 2),
+    ("draft", "Ultra Fast", "A quick look at the motion: small, not smoothed.", 320 * 480, 4, 2, 1, None),
+    ("fast", "Fast", "Small and quick, smoothed.", 384 * 576, 4, 2, 2, None),
+    ("fasthd", "Fast HD", "Made small and quick, then sharpened to Balanced size with an upscale model: close to "
+                          "Balanced in about half the time.", 384 * 576, 4, 2, 2, 512 * 768),
+    ("balanced", "Balanced", "Made at full size: more real detail.", 512 * 768, 4, 2, 2, None),
+    ("quality", "Quality", "Made larger, then sharpened to one and a half times its size. Takes its time.",
+     576 * 864, 4, 2, 2, 864 * 1296),
+    ("best", "Best", "As large as it gets, a few more steps, then sharpened to one and a half times its size. Slow and "
+                     "needs a lot of graphics memory.", 720 * 1080, 6, 3, 2, 1080 * 1620),
 ]
 VIDEO_PRESET = {p[0]: p for p in VIDEO_PRESETS}
-FULL_STEPS = {"draft": 12, "fast": 16, "balanced": 20, "quality": 26, "best": 30}
+FULL_STEPS = {"draft": 12, "fast": 16, "fasthd": 16, "balanced": 20, "quality": 26, "best": 30}
+
+
+def video_upscaler(options, wanted=""):
+    """The upscale model for videos: the one picked, else one that doubles (enough here, and quick), else any."""
+    options = list(options or [])
+    if wanted and wanted in options:
+        return wanted
+    for o in options:
+        lo = o.lower()
+        if "2x" in lo or "x2" in lo:
+            return o
+    return options[0] if options else ""
 
 LOOPS = [
     ("loop", "Seamless loop", "Ends where it starts (first + last frame = your picture), then the smoothest loop point "
@@ -533,6 +551,7 @@ VIDEO_DEFAULT = {
     "unet_high": "", "unet_low": "", "unet": "", "clip": "", "vae": "", "interp_model": "", "dtype": "default",
     "loras": [], "steps": 0, "high_steps": 0, "cfg_high": 0.0, "cfg_low": 0.0, "shift": 5.0, "sampler": "euler",
     "scheduler": "simple", "custom_size": 0, "aspect": "2:3", "unet_t2v": "", "seed": -1, "count": 1, "format": "mp4", "crf": 16,
+    "up_model": "",
 }
 
 
@@ -671,9 +690,12 @@ def video_plan(p, aspect):
         loop = "free"
     if loop == "crossfade":
         seconds += 0.75                  # extra frames that get blended into the start
-    return {"w": w, "h": h, "frames": frames_for(seconds), "steps": steps, "high_steps": max(1, min(hs, steps)),
-            "interp": max(1, interp), "fps": WAN_FPS * max(1, interp), "fast": fast, "mode": mode, "loop": loop,
-            "cfg_high": float(p.get("cfg_high") or 0) or cfg_def, "cfg_low": float(p.get("cfg_low") or 0) or cfg_def}
+    out = {"w": w, "h": h, "frames": frames_for(seconds), "steps": steps, "high_steps": max(1, min(hs, steps)),
+           "interp": max(1, interp), "fps": WAN_FPS * max(1, interp), "fast": fast, "mode": mode, "loop": loop,
+           "cfg_high": float(p.get("cfg_high") or 0) or cfg_def, "cfg_low": float(p.get("cfg_low") or 0) or cfg_def}
+    if q[7] and not int(p.get("custom_size") or 0):
+        out["up_w"], out["up_h"] = size_for(aspect, q[7])     # then enlarged with an upscale model
+    return out
 
 
 def build_video(p, pl, start_name, end_name, client, seed):
@@ -752,6 +774,17 @@ def build_video(p, pl, start_name, end_name, client, seed):
                     seed=int(seed), steps=steps, cfg=cfg_h, sampler_name=sampler, scheduler=sched, positive=cond_pos,
                     negative=cond_neg, latent_image=latent, denoise=1.0)
     out = g.add("VAEDecode", "Turning it into frames", per_step * 0.6, samples=[lat, 0], vae=[vae, 0])
+    if pl.get("up_w"):
+        # made small, enlarged with an upscale model (before the in-between frames: half as many to enlarge)
+        ups = client.choices("UpscaleModelLoader", "model_name") if client is not None else [p.get("up_model")]
+        name = video_upscaler(ups, p.get("up_model") or "")
+        up_units = pl["frames"] * pl["up_w"] * pl["up_h"] / 1e6 * 0.5
+        if name:
+            um = g.add("UpscaleModelLoader", model_name=name)
+            out = g.add("ImageUpscaleWithModel", "Sharpening the frames", up_units, upscale_model=[um, 0],
+                        image=[out, 0])
+        out = g.add("ImageScale", "Sharpening the frames", up_units * 0.1, image=[out, 0], upscale_method="lanczos",
+                    width=pl["up_w"], height=pl["up_h"], crop="disabled")
     if pl["interp"] > 1 and p.get("interp_model") and (client is None or (
             client.has("FrameInterpolate") and client.has("FrameInterpolationModelLoader"))):
         im = g.add("FrameInterpolationModelLoader", model_name=p["interp_model"])
@@ -773,4 +806,6 @@ def work_units(kind, plan, count=1):
             u += plan["hires"][1] * plan["final_w"] * plan["final_h"] / 1e6 * 1.2
         return u * count
     u = plan["steps"] * plan["w"] * plan["h"] * plan["frames"] / 1e6 / 20.0
+    if plan.get("up_w"):
+        u += plan["frames"] * plan["up_w"] * plan["up_h"] / 1e6 * 0.027      # enlarging the frames
     return u * count

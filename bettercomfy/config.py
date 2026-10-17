@@ -28,7 +28,7 @@ DEFAULTS = {
     "via_pinokio": False,             # start it through Pinokio instead of its own Python
     "stop_on_exit": True,             # stop the ComfyUI Better Comfy started when it closes
     "reserve_vram": 1.2,              # GB kept free on the graphics card (Windows slows down a lot when it is full)
-    "fast_mode": False,               # --fast fp16_accumulation
+    "fast_mode": True,                # --fast fp16_accumulation (faster, no visible change)
     "live_previews": "fast",          # off | fast (latent2rgb) | sharp (TAESD when installed)
     # output
     "image_dir": _home_dir("Pictures", "Better Comfy"),
@@ -51,9 +51,9 @@ DEFAULTS = {
     "delete_mode": "recycle",         # recycle | shred (built-in) | eraser
     "shred_passes": 1,                # 1 is enough on any drive of the last 20 years; 3 for those who want it
     "gallery_sort": "new",
-    "capture_block_app": False,
-    "comfy_forget_private": True,
-    "lora_blur_nsfw": False,
+    "capture_block_app": False,       # the whole app is left out of screenshots, recordings and screen sharing
+    "comfy_forget_private": True,     # after private jobs ComfyUI clears its cache (and unloads the models)
+    "lora_blur_nsfw": False,          # names and previews of LoRAs tagged NSFW are blurred
     "market_site": "civitai.red",     # the Market: which Civitai, sort, NSFW shown (off at first), favourites
     "market_sort": 0,
     "market_nsfw": False,
@@ -64,7 +64,7 @@ DEFAULTS = {
     "comfy_tidy": True,               # after each job: its uploads, temporary copies and history entry in ComfyUI go
     "forget_prompts": True,           # deleting a picture also takes its prompt out of the prompt history
     "collections_leave": True,        # a picture put into a collection no longer shows in All
-    "vault_collections_leave": True,  # the same for the vault and its collections          # names and previews of LoRAs tagged NSFW are blurred     # after private jobs ComfyUI clears its cache (and unloads the models)       # the whole app is left out of screenshots, recordings and screen sharing
+    "vault_collections_leave": True,  # the same for the vault and its collections
     "helper_dir": "",                 # where the prompt helper was set up ("" = in the app's data folder)
     "helper_model": "",
     "helper_button": True,

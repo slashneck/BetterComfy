@@ -75,6 +75,7 @@ class SettingsPage(QWidget):
     _drive_found = Signal(str)
     _privacy_found = Signal(str)
     _cleanup_found = Signal(object)
+    _perf_found = Signal(object)
 
     def __init__(self, app):
         super().__init__()
@@ -123,7 +124,7 @@ class SettingsPage(QWidget):
         c.add(field("Keep free", self.reserve, "Graphics memory kept free. On Windows a full card spills into normal "
                                                "memory and gets many times slower - 1 - 1.5 GB is good for 8 GB.",
                     label_w=90))
-        self.t_fast = ToggleRow("Faster maths (fp16 accumulation)", "A bit faster on RTX cards, tiny quality change",
+        self.t_fast = ToggleRow("Faster maths (fp16 accumulation)", "Faster, with no visible difference",
                                 cfg.get("fast_mode"), lambda v: cfg.set("fast_mode", v))
         c.add(self.t_fast)
         c.add(label("Start options are used the next time Better Comfy starts ComfyUI.", "Faint"))
@@ -256,6 +257,20 @@ class SettingsPage(QWidget):
         self._privacy_found.connect(self._show_privacy)
         self._pc_checked = False
         cards.add(c)
+
+        # ---------------------------------------------------------------- performance
+        c = Card("Performance")
+        c.add(label("What makes generating faster on this PC, with a button to each setting. Nothing is changed "
+                    "without you.", "Faint", wrap=True))
+        self.perf_rows = QWidget()
+        self.perf_lay = QVBoxLayout(self.perf_rows)
+        self.perf_lay.setContentsMargins(0, 0, 0, 0)
+        self.perf_lay.setSpacing(10)
+        self.perf_lay.addWidget(label("Looking…", "Muted"))
+        c.add(self.perf_rows, hrow(button("Look again", self._scan_perf, "Ghost", "refresh"), None))
+        cards.add(c)
+        self._perf_found.connect(self._show_perf)
+        self._perf_scanned = False
 
         # ---------------------------------------------------------------- drives
         c = Card("Drives")
@@ -608,6 +623,58 @@ class SettingsPage(QWidget):
         from .vault import DIR
         if os.path.isdir(DIR):
             system.open_folder(DIR)
+
+    # ---- performance
+    def _scan_perf(self):
+        from . import perf
+        ins = self.link.install()
+        models = comfy.sub_dir(ins, "models") if ins else None
+
+        def work():
+            try:
+                res = perf.checks(models)
+            except Exception:
+                res = []
+            try:
+                self._perf_found.emit(res)
+            except RuntimeError:                    # the window closed meanwhile
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_perf(self, rows):
+        while self.perf_lay.count():
+            it = self.perf_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        if not rows:
+            self.perf_lay.addWidget(label("Could not be read.", "Muted"))
+            return
+        for r in rows:
+            col = {"ok": T.GOOD, "tip": T.WARN}.get(r["state"], T.TEXT3)
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color: {col}; font-size: 10px;")
+            dot.setFixedWidth(14)
+            dot.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+            body = vcol(label(r["title"], None), label(r["text"], "Faint", wrap=True), spacing=1)
+            parts = [dot, body]
+            if r.get("action"):
+                text, key = r["action"]
+                parts += [button(text, lambda _=False, k=key: self._perf_act(k), "Ghost",
+                                 "check" if key == "fast_on" else "external")]
+            row = hrow(*parts, spacing=8)
+            row.layout().setAlignment(dot, Qt.AlignmentFlag.AlignTop)
+            self.perf_lay.addWidget(row)
+
+    def _perf_act(self, key):
+        from . import perf
+        if key == "fast_on":
+            cfg.set("fast_mode", True)
+            self.t_fast.set(True)
+            self.app.toast("Faster maths is on: used the next time ComfyUI starts.", "ok")
+            self._scan_perf()
+            return
+        if not perf.act(key):
+            self.app.toast("That setting could not be opened on this PC.", "warn")
 
     # ---- drives
     def drives_changed(self):
@@ -978,6 +1045,9 @@ class SettingsPage(QWidget):
         if not self._pc_checked:
             self._pc_checked = True
             self._check_pc()
+        if not self._perf_scanned:
+            self._perf_scanned = True
+            self._scan_perf()
         if not self._cleanup_scanned:
             self._cleanup_scanned = True
             self._scan_cleanup()

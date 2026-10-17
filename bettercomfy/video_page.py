@@ -142,7 +142,10 @@ class VideoPage(QWidget):
                                ("unet_t2v", "Text→video", "The WAN text-to-video model (used without a start picture)"),
                                ("clip", "Text encoder", "umt5 xxl"),
                                ("vae", "VAE", "wan_2.1_vae for WAN 2.1 / 2.2 14B"),
-                               ("interp_model", "Smoother", "RIFE model for Smoothing")):
+                               ("interp_model", "Smoother", "RIFE model for Smoothing"),
+                               ("up_model", "Upscaler", "Enlarges the frames for Fast HD, Quality and Best. Anime "
+                                                        "upscalers keep lines crisp; for realistic videos pick a "
+                                                        "realistic one (models/upscale_models).")):
             cb = Combo()
             cb.currentIndexChanged.connect(lambda _=0, k=key, cb=cb: self._set(k, cb.currentData() or ""))
             self.combos[key] = cb
@@ -353,7 +356,8 @@ class VideoPage(QWidget):
         self._loading = True
         guess = lists.get("video_guess") or {}
         src = {"unet_high": "unet", "unet_low": "unet", "unet": "unet", "unet_t2v": "unet", "clip": "clip",
-               "vae": "vae", "interp_model": "interp"}
+               "vae": "vae", "interp_model": "interp", "up_model": "upscale"}
+        guess = dict(guess, up_model=W.video_upscaler(lists.get("upscale")))
         for k, cb in self.combos.items():
             opts = list(lists.get(src[k]) or [])
             if k.startswith("unet"):
@@ -433,15 +437,23 @@ class VideoPage(QWidget):
         self.frames_lbl.setText(f"{frames} frames from WAN  →  {cut}{fin * pl['interp']} frames at {pl['fps']} fps"
                                 f" ({fin / 16:.1f} s)")
         q = W.VIDEO_PRESET[p.get("preset", "fast")]
+        up = ""
+        if pl.get("up_w"):
+            has = bool(self.link.lists.get("upscale"))
+            up = (f"  ·  sharpened to {pl['up_w']} × {pl['up_h']}" if has else
+                  f"  ·  enlarged to {pl['up_w']} × {pl['up_h']} (an upscale model in models/upscale_models makes "
+                  "it sharp)")
         self.preset_line.setText(f"{q[2]}\n{pl['steps']} steps ({pl['high_steps']} motion)  ·  guidance "
-                                 f"{pl['cfg_high']:g}  ·  {pl['fps']} fps")
-        self.size_prev.set(pl["w"], pl["h"], base=int((q[3]) ** 0.5), note=f"{frames} frames")
+                                 f"{pl['cfg_high']:g}  ·  {pl['fps']} fps{up}")
+        note = f"{frames} frames" + (f"\nthen {pl['up_w']} × {pl['up_h']}" if pl.get("up_w") else "")
+        self.size_prev.set(pl["w"], pl["h"], base=int((q[3]) ** 0.5), note=note)
         self.speed_note.setText("speed model" if pl["fast"] else "full steps")
         self.speed_note.setToolTip("Lightning / Lightspeed / lightx2v found: 4 - 10 steps, guidance 1." if pl["fast"]
                                    else "No speed model or LoRA: 12 - 30 steps, guidance 3.5 (slower).")
         n = self.bar.count.value()
         est = jobs.estimate("video", W.work_units("video", pl, n))
-        self.bar.info.setText(f"{pl['w']} × {pl['h']}  ·  {frames} frames  ·  " +
+        size = f"{pl['w']} × {pl['h']}" + (f" → {pl['up_w']} × {pl['up_h']}" if pl.get("up_w") else "")
+        self.bar.info.setText(f"{size}  ·  {frames} frames  ·  " +
                               (f"≈ {human_time(est)}" if est else "time shown after the first video"))
 
     # ------------------------------------------------------------------ generate
