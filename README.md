@@ -35,7 +35,8 @@ spotted and run with few steps by themselves. Every fine control is still there 
 **Videos.** WAN 2.2 and 2.1, from a picture or from words only. Seamless loops that find the smoothest loop point and
 blend the seam, ping-pong, crossfade, start to end picture. Smoothing up to 4x the frame rate, steady colours, MP4, WebM
 or GIF. Extend a video from its last frame and get both parts as one longer video. Drop a whole folder of pictures to
-animate them all.
+animate them all. Six presets from Ultra Fast to Best: Fast HD makes a video small and quick and then sharpens it to
+Balanced size with an upscale model, in about half the time, and Quality and Best are made larger and sharpened further.
 
 **Edit and upscale.** Paint over a part of a picture, say what should be there, and only that part is drawn new. Make
 any picture bigger and sharper with its own model, prompt and seed, or just enlarge it with an upscale model.
@@ -53,12 +54,15 @@ from the drive right there.
 
 **A model library.** Your checkpoints and diffusion models side by side, each marked as such, with what they are made
 for, tags, notes, a cover, the page you got them from and their size. Fetch, favourites, delete and Use on Image work
-like in the LoRA library.
+like in the LoRA library. When a model needs a text encoder or VAE you don't have yet (Anima, Flux, Qwen-Image, Z-Image,
+Krea 2), it says so and downloads the official one with one click.
 
 **A market.** Browse Civitai (civitai.red or civitai.com) for LoRAs and checkpoints inside the app: search, filter by
 what a model is made for, sort, keep favourites. Downloads go straight into the right ComfyUI folder, are checked
-against Civitai's checksum and arrive with their link, trigger words, cover and what they are made for. SFW only until
-you switch NSFW on. Some creators only allow downloads when logged in: for those, add your Civitai API key in Settings.
+against Civitai's checksum and arrive with their link, trigger words, cover and what they are made for. Every model
+shows its downloads and likes, and every file whether it is safe: `.safetensors` (only numbers, can't run code) and
+Civitai's virus and hidden code scans. SFW only until you switch NSFW on. Some creators only allow downloads when logged
+in: for those, add your Civitai API key in Settings.
 
 **A queue.** Pictures and videos one after the other, with time estimates learned on your PC. Take single pictures out
 of a job, stop one while the rest goes on, and choose what happens when the queue is done: nothing, free the graphics
@@ -66,14 +70,21 @@ memory, stop ComfyUI, close the app, sleep or shut down.
 
 **A gallery.** Everything you made, with its settings. Reuse them, view pictures big with zoom, join videos, animate or
 upscale from there. Pictures keep their settings inside the file, and dropping one onto ComfyUI opens its workflow.
-Favourite with F, mark with X and delete everything marked at once, sort by date, type, model or LoRA, filter and search,
-and keep pictures in collections (also smart ones that fill themselves by model or LoRA).
+Favourite with F, mark with X and delete everything marked at once (favourites are never deleted), sort by date, type,
+model or LoRA, filter and search, and keep pictures in collections with sub-collections (also smart ones that fill
+themselves by model or LoRA). GIFs play in a loop at a speed you set. Bring in pictures and videos from a folder or
+another app by dropping them onto the gallery.
 
 **A vault.** Pictures and videos that only open with your password, encrypted with Argon2id and AES-256-GCM and only
 ever decrypted in memory. Turn on Private next to Generate and the result goes straight into the vault, without a copy
 in your folders or in ComfyUI's. Move pictures in later, take them out again, or animate, upscale and edit them without
-them leaving the vault. Collections inside the vault, whose names are encrypted too and only show while it is open. A
-recovery key, auto lock, and a re-encrypt option when you change the password.
+them leaving the vault. Collections and sub-collections inside the vault, whose names are encrypted too and only show
+while it is open, favourites and marks for deletion. A recovery key, auto lock, and a re-encrypt option when you change
+the password.
+
+**Drives.** Keep pictures, videos and vault files on a USB stick or another drive. What is on it shows in the gallery
+while it is plugged in (vault files once the vault is open too), sorted as before, and nothing is forgotten while it is
+out. Vault files stay encrypted on the drive, which also keeps an encrypted copy of what is on it.
 
 **Deleting for good.** Deleted files can go to the Recycle Bin, be shredded (overwritten, renamed and then deleted) or be
 handed to Eraser if it is installed. Deleting a picture also takes its prompt out of the prompt history and the queue
@@ -82,12 +93,16 @@ history, unused thumbnails, masks, logs) and removes it, and ComfyUI is tidied a
 
 **A prompt helper.** Small language models that improve, extend, shorten or write prompts, as tags or as sentences
 depending on the model, and write motion for videos. Uncensored writing models (Qwen3.5 2B, 4B or 9B) and TIPO, a model
-made only for Danbooru tags. They run on the processor, so the graphics card stays free. All optional: pick them in
+made only for Danbooru tags. The writing model keeps every person, position and action you name and describes the
+picture plainly, as a camera would see it. They run on the processor, so the graphics card stays free. All optional: pick them in
 Settings and each downloads once (1 to 5 GB) to a folder you pick, or use a `.gguf` model you already have. Tag models
 also get tag suggestions while you type, with a tag blacklist you can edit.
 
 **Screen capture blocking.** Screenshots, recordings and screen sharing can't see Better Comfy, either always or while
 the vault is open.
+
+**Performance.** A card in Settings looks at your PC (page file, memory, power mode, where the models are, the graphics
+driver) and Better Comfy's own options, and opens the right setting for each recommendation.
 
 **Little things.** Your own presets, live previews while a picture is drawn, prompt history, Ctrl+Enter to generate,
 a Stop button that slides out of Generate while something is made, count arrows that double and halve,
