@@ -267,10 +267,12 @@ class PartsDialog(QDialog):
         v.setSpacing(10)
         v.addWidget(label(f"{W.FAMILIES[family]['name']}: missing parts", "H2"))
         total = sum(p["size"] for _w, p in self.parts)
-        v.addWidget(label("These are the official files from Comfy-Org on Hugging Face, checked against a fixed "
-                          f"checksum after the download. Together {_mb(total)}.", "Muted", wrap=True))
+        v.addWidget(label("The official files on Hugging Face (from Comfy-Org, ComfyUI's makers, or the model's "
+                          "own makers), checked against a fixed checksum after the download. Together "
+                          f"{_mb(total)}.", "Muted", wrap=True))
         for what, p in self.parts:
-            v.addWidget(label(f"{what}:  {p['file']}  ·  {_mb(p['size'])}", None))
+            src = f"  ·  from {p['from']}" if p.get("from") else ""
+            v.addWidget(label(f"{what}:  {p['file']}  ·  {_mb(p['size'])}{src}", None))
         self.dir = QLineEdit(comfy.sub_dir(install, "models") if install else "")
         self.dir.setMinimumHeight(34)
         self.dir.textChanged.connect(lambda _t: self._check())

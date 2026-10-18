@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from . import ckpts, comfy, icons, loras, system, theme as T
+from . import ckpts, comfy, icons, loras, system, theme as T, workflows as W
 from .config import cfg
 from .widgets import (BLUR_ROLE, BlurTextDelegate, Card, ChipBox, Combo, ImageDrop, Scroll, Segmented, ToggleRow,
                       blur_pixmap, blur_widget, button, chip, field, hrow, icon_button, label, nice_name, quiet,
@@ -118,7 +118,10 @@ class CheckpointsPage(QWidget):
         for w in (self.fam_badge, self.type_badge, self.size_badge):
             self.badges.layout().addWidget(w)
         self.badges.layout().addStretch(1)
-        self.det.add(self.file, self.badges)
+        self.parts_lbl = label("", "Muted", wrap=True)
+        self.parts_btn = button("Download the missing parts…", self._get_parts, "Ghost", "download",
+                                "Its text encoder or VAE, the official files, checked after the download")
+        self.det.add(self.file, self.badges, self.parts_lbl, hrow(self.parts_btn, None))
         self.prev = ImageDrop("Drop a cover picture here, or click to choose one", 210)
         self.prev.changed.connect(self._set_preview)
         self.det.add(self.prev)
@@ -427,6 +430,10 @@ class CheckpointsPage(QWidget):
         self.use_lbl.setVisible(not usable)
         self.use_lbl.setText("A video model: pick it on the Video page." if fam == "wan" else
                              "Better Comfy can't make pictures with this kind of model (yet).")
+        miss = self._missing(k)
+        self.parts_lbl.setText(f"It needs its {' and '.join(miss)}, which are not there yet." if miss else "")
+        self.parts_lbl.setVisible(bool(miss))
+        self.parts_btn.setVisible(bool(miss) and fam in W.PART_DOWNLOADS)
         self._enable(True)
         self._fetch_state()
 
@@ -497,6 +504,22 @@ class CheckpointsPage(QWidget):
         it = self.grid.currentItem()
         if it and self.cur:
             it.setIcon(self._icon(self.cur))
+
+    def _missing(self, k):
+        """The parts (text encoder, VAE) a model of its family needs that aren't in ComfyUI yet."""
+        fam = ckpts.made_for(k, self._kind(k))
+        if fam not in W.FAMILIES or W.FAMILIES[fam]["engine"] == "sd":
+            return []
+        return W.engine_parts(fam, {}, self.link.lists or {})[3]
+
+    def _get_parts(self):
+        from .helper_ui import PartsDialog
+        if not self.cur:
+            return
+        fam = ckpts.made_for(self.cur, self._kind(self.cur))
+        if PartsDialog(self, fam, self._missing(self.cur), self.link.install()).exec():
+            self.link.refresh_models()
+            self.app.toast("Downloaded. The model lists are read again.", "ok")
 
     def _use(self):
         if not self.cur:

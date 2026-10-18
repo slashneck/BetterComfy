@@ -269,6 +269,19 @@ def model_file(version):
     return files[0] if files else None
 
 
+def safety(f):
+    """(clean | pending | flagged | none, text) for a file: .safetensors holds only numbers and can't run code; Civitai
+    also scans every file for viruses and for hidden code."""
+    if not f:
+        return "none", ""
+    virus, pickle = str(f.get("virusScanResult") or ""), str(f.get("pickleScanResult") or "")
+    if "danger" in (virus + pickle).lower():
+        return "flagged", "Civitai's scan flagged this file. A .safetensors file can't run code, but be careful."
+    if virus == "Success" and pickle == "Success":
+        return "clean", "Safe format (.safetensors, can't run code) and scanned clean by Civitai."
+    return "pending", "Safe format (.safetensors, can't run code). Civitai's scan isn't finished yet."
+
+
 def safe_name(name):
     base = os.path.basename(str(name or "").replace("\\", "/")).strip()
     base = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", base)

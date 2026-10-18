@@ -208,7 +208,9 @@ class MarketView(QWidget):
         self.version.currentIndexChanged.connect(lambda _=0: self._version_changed())
         self.file = label("", "Faint", wrap=True)
         self.have = label("", "Muted", wrap=True)
-        self.det.add(self.version, self.file, self.have)
+        self.safety = label("", None, wrap=True)
+        self.safety.setTextFormat(Qt.TextFormat.RichText)
+        self.det.add(self.version, self.file, self.safety, self.have)
         self.dl_btn = button("Download", self._download, "Accent", "download")
         self.stop_btn = button("Stop", self._stop_dl, "Ghost", "stop")
         self.open_btn = button("Open page", self._open_page, "Ghost", "external")
@@ -402,10 +404,15 @@ class MarketView(QWidget):
         return self._icons[key]
 
     def _add_item(self, m):
-        it = QListWidgetItem(self._icon(m), m.get("name") or "?")
+        st = m.get("stats") or {}
+        line = (f"\n↓ {_num(st.get('downloadCount'))}   ♥ {_num(st.get('thumbsUpCount'))}"
+                if not m.get("_snapshot") else "")
+        name = m.get("name") or "?"
+        if line:                                # one line for the name, so the numbers always show
+            name = self.grid.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 134)
+        it = QListWidgetItem(self._icon(m), name + line)
         it.setData(Qt.ItemDataRole.UserRole, m["id"])
         it.setData(BLUR_ROLE, self._hidden(m))
-        st = m.get("stats") or {}
         it.setToolTip("" if self._hidden(m) else f"{m.get('name')}\n{self._base(m)}  ·  "
                                                  f"{_num(st.get('downloadCount'))} downloads")
         self.grid.addItem(it)
@@ -558,11 +565,18 @@ class MarketView(QWidget):
         self.trig_lbl.setVisible(bool(words))
         self.trig.setVisible(bool(words))
         f = C.model_file(v)
+        vs = v.get("stats") or {}
+        when = (v.get("publishedAt") or "")[:10]
         if f:
-            self.file.setText(f"{f.get('name')}  ·  {float(f.get('sizeKB') or 0) / 1024:.0f} MB")
+            self.file.setText(f"{f.get('name')}  ·  {float(f.get('sizeKB') or 0) / 1024:.0f} MB  ·  this version: "
+                              f"{_num(vs.get('downloadCount'))} downloads" + (f", from {when}" if when else ""))
         else:
             self.file.setText("No .safetensors file in this version (other formats can run code, so they are "
                               "not offered).")
+        state, text = C.safety(f)
+        col = {"clean": T.GOOD, "pending": T.WARN, "flagged": T.BAD}.get(state, T.TEXT3)
+        self.safety.setText(f'<span style="color:{col}">●</span>&nbsp; {text}')
+        self.safety.setVisible(bool(f))
         self._dl_state()
 
     def _have(self, f):
@@ -600,6 +614,11 @@ class MarketView(QWidget):
         ins = self.link.install()
         if v is None or m is None or not ins or v["id"] in self.dls:
             return
+        if C.safety(C.model_file(v))[0] == "flagged":
+            from PySide6.QtWidgets import QMessageBox
+            if QMessageBox.question(self, "Download", "Civitai's scan flagged this file. Download it anyway?") != \
+                    QMessageBox.StandardButton.Yes:
+                return
         dest = comfy.sub_dir(ins, self.folder)
         host = m.get("_host") or self.host()
         key = C.api_key()

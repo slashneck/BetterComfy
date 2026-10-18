@@ -54,12 +54,47 @@ FAMILY_ORDER = ["sdxl", "pony", "illustrious", "sd15", "flux", "qwen", "anima", 
 # parts an engine needs that the app can fetch on request (official files, fixed checksums), by what is missing
 PART_DOWNLOADS = {
     "krea2": {
-        "text encoder": {"folder": "models/text_encoders", "file": "qwen3vl_4b_fp8_scaled.safetensors",
-                         "size": 5242467968, "sha256": "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
+        "text encoder": {"folder": "models/text_encoders", "file": "qwen3vl_4b_fp8_scaled.safetensors", "size": 5242467968,
+                         "from": "Comfy-Org", "sha256": "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
                          "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/eb1eddd3983a54678545a9b2c178c5853b30f7be/text_encoders/qwen3vl_4b_fp8_scaled.safetensors"},
         "VAE": {"folder": "models/vae", "file": "qwen_image_vae.safetensors", "size": 253806246,
-                "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+                "from": "Comfy-Org", "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
                 "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/eb1eddd3983a54678545a9b2c178c5853b30f7be/vae/qwen_image_vae.safetensors"},
+    },
+    "anima": {
+        "text encoder": {"folder": "models/text_encoders", "file": "qwen_3_06b_base.safetensors", "size": 1192135096,
+                         "from": "circlestone-labs", "sha256": "cd2a512003e2f9f3cd3c32a9c3573f820bb28c940f73c57b1ddaa983d9223eba",
+                         "url": "https://huggingface.co/circlestone-labs/Anima/resolve/f973fc41ec7545364ac9776c2440285f43ff2a30/split_files/text_encoders/qwen_3_06b_base.safetensors"},
+        "VAE": {"folder": "models/vae", "file": "qwen_image_vae.safetensors", "size": 253806246,
+                "from": "Comfy-Org", "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+                "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"},
+    },
+    "qwen": {
+        "text encoder": {"folder": "models/text_encoders", "file": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "size": 9384670680,
+                         "from": "Comfy-Org", "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+                         "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"},
+        "VAE": {"folder": "models/vae", "file": "qwen_image_vae.safetensors", "size": 253806246,
+                "from": "Comfy-Org", "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+                "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"},
+    },
+    "flux": {
+        "text encoder": {"folder": "models/text_encoders", "file": "clip_l.safetensors", "size": 246144152,
+                         "from": "comfyanonymous", "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd",
+                         "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors"},
+        "text encoder 2": {"folder": "models/text_encoders", "file": "t5xxl_fp8_e4m3fn_scaled.safetensors", "size": 5157348688,
+                           "from": "comfyanonymous", "sha256": "a498f0485dc9536735258018417c3fd7758dc3bccc0a645feaa472b34955557a",
+                           "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/t5xxl_fp8_e4m3fn_scaled.safetensors"},
+        "VAE": {"folder": "models/vae", "file": "ae.safetensors", "size": 335304388,
+                "from": "Comfy-Org", "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+                "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/6fc90a3b1b653e935a0d175e260736de25b84df5/split_files/vae/ae.safetensors"},
+    },
+    "zimage": {
+        "text encoder": {"folder": "models/text_encoders", "file": "qwen_3_4b.safetensors", "size": 8044982048,
+                         "from": "Comfy-Org", "sha256": "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a",
+                         "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/6fc90a3b1b653e935a0d175e260736de25b84df5/split_files/text_encoders/qwen_3_4b.safetensors"},
+        "VAE": {"folder": "models/vae", "file": "ae.safetensors", "size": 335304388,
+                "from": "Comfy-Org", "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+                "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/6fc90a3b1b653e935a0d175e260736de25b84df5/split_files/vae/ae.safetensors"},
     },
 }
 ENGINE_KINDS = ("flux", "qwen", "anima", "zimage", "krea2")
@@ -153,8 +188,10 @@ def engine_parts(fam, p, lists):
         te.append(p.get("te2") or pick_part(clips, F["te"][1]))
     vae = p.get("evae") or pick_part(vaes, F["vae"])
     miss = []
-    if not all(te):
+    if not te[0]:
         miss.append("text encoder")
+    if len(te) > 1 and not te[1]:
+        miss.append("text encoder 2")
     if not vae:
         miss.append("VAE")
     return te[0], (te[1] if len(te) > 1 else ""), vae, miss
