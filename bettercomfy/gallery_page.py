@@ -263,14 +263,23 @@ def _paths(e):
 
 
 class _Grid(FileList):
-    """The gallery grid: drags its pictures out as files, and takes pictures dropped in from outside (imported into
-    the place that is shown)."""
+    """The gallery grid: drags its pictures out as files (vault ones too: decrypted for the drop, see
+    Window.drag_out_files), and takes pictures dropped in from outside (imported into the place that is shown)."""
 
     def __init__(self, page):
         super().__init__()
         self.page = page
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+
+    def mimeData(self, items):
+        md = super().mimeData(items)
+        locked = [self.page._get(it.data(Qt.ItemDataRole.UserRole)) for it in items]
+        locked = [e for e in locked if e and e.get("vault")]
+        if locked:
+            from PySide6.QtCore import QUrl
+            md.setUrls(list(md.urls()) + [QUrl.fromLocalFile(p) for p in self.page.app.drag_out_files(locked)])
+        return md
 
     def dragEnterEvent(self, e):
         if _outside(e):
@@ -474,13 +483,14 @@ class GalleryPage(QWidget):
         self.b = {}
         acts = [("reuse", "Reuse", "refresh"), ("animate", "Animate", "video"), ("extend", "Extend", "arrow"),
                 ("upscale", "Upscale", "scale"), ("inpaint", "Edit", "edit"), ("compare", "Comparison", "gallery"),
-                ("copyprompt", "Copy prompt", "copy"), ("folder", "Show in folder", "folder"),
+                ("trimcrop", "Trim & crop", "crop"), ("copyprompt", "Copy prompt", "copy"),
+                ("folder", "Show in folder", "folder"),
                 ("move_vault", "To vault", "lock"), ("take_out", "Take out", "unlock"), ("delete", "Delete", "trash")]
         for k, t, ic in acts:
             self.b[k] = button(t, lambda k=k: self._act(k), "Ghost" if k != "reuse" else None, ic)
         acts_box = ChipBox(4)           # wraps: never cut off, whatever is shown for the picked item
-        for k in ("reuse", "animate", "extend", "upscale", "inpaint", "compare", "copyprompt", "folder", "move_vault",
-                  "take_out", "delete"):
+        for k in ("reuse", "animate", "extend", "upscale", "inpaint", "trimcrop", "compare", "copyprompt", "folder",
+                  "move_vault", "take_out", "delete"):
             acts_box.add(self.b[k])
         sv.addWidget(acts_box)
         self.multi = label("", "Faint")
@@ -1601,6 +1611,9 @@ class GalleryPage(QWidget):
         if k == "move_vault":
             self.app.move_to_vault([e for e in self._selected() if not e.get("vault")])
             return
+        if k == "trimcrop":
+            self.app.edit_entry(self.cur)
+            return
         if k == "take_out":
             self.app.take_out_of_vault([e for e in self._selected() if e.get("vault")])
             return
@@ -1657,6 +1670,8 @@ class GalleryPage(QWidget):
                         ("Unmark" if allmark else "Mark for deletion") + (f" ({len(sel)})" if many else "")
                         ).triggered.connect(lambda: self.app.toggle_flag(sel, "marked"))
             if not many:
+                m.addAction(icons.icon("crop", "#A1A1AA", 16), "Trim, crop, turn…").triggered.connect(
+                    lambda: self.app.edit_entry(e))
                 m.addAction(icons.icon("folder", "#A1A1AA", 16), "Show where its file is").triggered.connect(
                     lambda: self.app.result_action("folder", e, self))
             m.addAction(icons.icon("layers", "#A1A1AA", 16), "Vault collections…").triggered.connect(
@@ -1701,6 +1716,8 @@ class GalleryPage(QWidget):
             else:
                 m.addAction(icons.icon("arrow", "#A1A1AA", 16), "Extend from last frame").triggered.connect(
                     lambda: self.app.result_action("extend", e, self))
+            m.addAction(icons.icon("crop", "#A1A1AA", 16), "Trim, crop, turn…").triggered.connect(
+                lambda: self.app.edit_entry(e))
             m.addAction(icons.icon("folder", "#A1A1AA", 16), "Show in folder").triggered.connect(
                 lambda: self.app.result_action("folder", e, self))
             if e.get("group"):

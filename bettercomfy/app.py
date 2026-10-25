@@ -1155,6 +1155,83 @@ class Window(QMainWindow):
             self.pages["gallery"].vault_changed()
         self.toast(msg, "ok" if not bad else "warn")
 
+    # ---- dragging vault items out (into a folder in Explorer, onto the desktop)
+    def drag_out_files(self, entries):
+        """Vault items as files for a drag out of the app: decrypted into a short-lived folder in Better Comfy's own
+        data folder (Windows needs a file to drop), shredded a few minutes later and when the app closes."""
+        import uuid
+        folder = os.path.join(DRAG_DIR, uuid.uuid4().hex[:8])
+        os.makedirs(folder, exist_ok=True)
+        out = []
+        for e in entries:
+            try:
+                name = (e.get("name") or "private") + "." + (e.get("fmt") or ("png" if e.get("kind") == "image" else "mp4"))
+                path = media.unique(os.path.join(folder, name))
+                vault.export(e, path)
+                out.append(path)
+            except Exception:
+                pass
+        QTimer.singleShot(180000, lambda: drag_out_clear(folder))
+        return out
+
+    # ---- small edits (editor.py) and frames saved as pictures
+    def edit_entry(self, e):
+        if e.get("vault") and not vault.is_open():
+            return
+        from .editor import EditDialog
+        EditDialog(self, self, e).exec()
+
+    def save_frame(self, e, qimage):
+        """The frame on screen of a video or GIF, saved as a picture next to it."""
+        from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        qimage.save(buf, "PNG")
+        buf.close()
+        self.add_derived(e, {"data": bytes(ba), "ext": "png", "kind": "image", "w": qimage.width(),
+                             "h": qimage.height()}, "_frame")
+
+    def add_derived(self, src, res, suffix):
+        """A new picture / video made from another one (edited, a frame of it): next to it, in the same place - its
+        folder or drive, or the vault - and in the same collections, with its settings."""
+        from . import stores
+        keep = {k: src[k] for k in ("prompt", "final_prompt", "negative", "model", "params", "preset", "loras", "seed")
+                if k in src}
+        import time
+        meta = dict(keep, kind=res["kind"], w=res["w"], h=res["h"], op="edit", created=time.strftime("%Y-%m-%d %H:%M:%S"))
+        for k in ("seconds", "fps"):
+            if res.get(k):
+                meta[k] = res[k]
+        data = res["data"]
+        thumb = _thumb_of(data, res)
+        stem = (src.get("name") or os.path.splitext(os.path.basename(src.get("file") or "item"))[0]) + suffix
+        if src.get("vault"):
+            sid = src.get("store") if src.get("store") and stores.root(src["store"]) else None
+            e2 = vault.add(data, dict(meta, name=stem, fmt=res["ext"]), thumb, store=sid)
+            for c in src.get("cols") or []:
+                vault.set_in_collection([e2["id"]], c, True)
+            self.pages["gallery"].vault_changed()
+        else:
+            folder = os.path.dirname(src["file"])
+            path = media.unique(os.path.join(folder, f"{stem}.{res['ext']}"))
+            with open(path, "wb") as fh:
+                fh.write(data)
+            sid = src.get("store") if src.get("store") and stores.root(src["store"]) else None
+            tdir = stores.thumbs_dir(sid) if sid else os.path.join(BASE, "thumbs")
+            th = None
+            if thumb:
+                os.makedirs(tdir, exist_ok=True)
+                th = media.unique(os.path.join(tdir, f"{stem}.jpg"))
+                with open(th, "wb") as fh:
+                    fh.write(thumb)
+            e2 = dict(meta, file=path, thumb=th, cols=list(src.get("cols") or []))
+            if sid:
+                r = stores.root(sid)
+                e2.update(store=sid, rel=os.path.relpath(path, r), thumb_rel=os.path.relpath(th, r) if th else None)
+            self.history.add(e2)
+        self.toast("Saved next to it." if suffix == "_frame" else "Saved as a new one next to the original.", "ok")
+
     def forget_pictures(self, refs):
         """Pictures that are gone (deleted, moved into or out of the vault) leave the start / end picture slots too,
         so Generate never runs into a missing picture."""
@@ -1317,6 +1394,7 @@ class Window(QMainWindow):
 
     def _shutdown_cleanup(self):
         vault.lock()
+        drag_out_clear()
         from . import assistant
         assistant.stop_all()
         self._save_window()
@@ -1526,3 +1604,34 @@ def _import_meta(path, kind):
         meta["frames"] = len(frames)
         meta["seconds"] = round(len(frames) / fps, 1) if fps else ""
     return meta
+
+
+def _thumb_of(data, res):
+    """A small JPEG of a picture, a GIF or a video (its first frame), from its bytes in memory."""
+    try:
+        if res["kind"] == "video":
+            png = media._ffmpeg_pipe(["-i", "pipe:0", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png",
+                                      "pipe:1"], data_in=data)
+            return media.thumbnail_bytes(png)
+        return media.thumbnail_bytes(data)
+    except Exception:
+        return None
+
+
+
+DRAG_DIR = os.path.join(BASE, "drag-out")
+
+
+def drag_out_clear(folder=None):
+    """The decrypted copies made for dragging vault items out: shredded (all of them, or one drag's folder)."""
+    import shutil
+    from . import shred
+    root = folder or DRAG_DIR
+    if not os.path.isdir(root):
+        return
+    files = [os.path.join(r, f) for r, _d, fs in os.walk(root) for f in fs]
+    try:
+        shred.delete(files, "shred")
+    except Exception:
+        pass
+    shutil.rmtree(root, ignore_errors=True)

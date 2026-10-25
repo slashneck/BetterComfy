@@ -73,7 +73,7 @@ $pyi = @(
     '--distpath', (Join-Path $work 'pyi-dist'), '--workpath', (Join-Path $work 'pyi-work'), '--specpath', $work
 )
 foreach ($m in 'tkinter', 'matplotlib', 'imageio', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtQml',
-               'PySide6.QtQuick', 'PySide6.Qt3DCore', 'PySide6.QtMultimedia', 'PySide6.QtPdf', 'PySide6.QtCharts',
+               'PySide6.QtQuick', 'PySide6.Qt3DCore', 'PySide6.QtPdf', 'PySide6.QtCharts',
                'PySide6.QtDataVisualization', 'PySide6.QtBluetooth', 'PySide6.QtPositioning', 'PySide6.QtSql', 'PySide6.QtTest') {
     $pyi += '--exclude-module', $m
 }

@@ -56,6 +56,15 @@ _P = {
     "tag": '<path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8.5" cy="8.5" r="1.5"/>',
     "usb": '<rect x="6.5" y="9" width="11" height="12.5" rx="2.5"/><path d="M8.5 9V3h7v6"/>'
            '<path d="M10.5 5.6v.8M13.5 5.6v.8"/>',
+    "volume": '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6M18.2 6.3a8.3 8.3 0 0 1 0 11.4"/>',
+    "mute": '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
+    "crop": '<path d="M6.5 3v14.5H21M3 6.5h14.5V21"/>',
+    "rotate": '<path d="M4.5 12a7.5 7.5 0 1 0 2.3-5.4"/><path d="M4 3.5V8h4.5"/>',
+    "rotate_r": '<path d="M19.5 12a7.5 7.5 0 1 1-2.3-5.4"/><path d="M20 3.5V8h-4.5"/>',
+    "flip": '<path d="M12 3v18M9 6.5L4 18h5zM15 6.5L20 18h-5z"/>',
+    "camera": '<path d="M4 8.5A2 2 0 0 1 6 6.5h2L9.5 4.5h5L16 6.5h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>'
+              '<circle cx="12" cy="13" r="3.5"/>',
+    "slides": '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/>',
     "monitor": '<rect x="3" y="4" width="18" height="12" rx="2.5"/><path d="M8 20h8M12 16v4"/>',
     "palette": '<path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-1.4-1-1.8-1-3 0-1.1.9-2 2-2h2a4 4 0 0 0 4-4c0-4-4-7-9-7z"/>'
                '<circle cx="7.5" cy="11" r="1.2" fill="currentColor"/><circle cx="10" cy="7" r="1.2" fill="currentColor"/>'

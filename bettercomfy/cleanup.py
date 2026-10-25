@@ -65,6 +65,7 @@ class Cleanup:
             ("thumbs", "Thumbnails without a picture", "Small previews of pictures that are not in the gallery any more"),
             ("work", "Masks and video frames", "Masks from Edit a part, last frames for Extend"),
             ("logs", "Logs", "Better Comfy's and ComfyUI's logs (an error can show a prompt)"),
+            ("dragout", "Copies from dragging vault items out", "Shredded a few minutes after each drag anyway"),
         ]
 
     def _paths(self, key):
@@ -78,6 +79,8 @@ class Cleanup:
             return [p for p in _files(os.path.join(BASE, "thumbs")) if os.path.normcase(p) not in used]
         if key == "work":
             return _files(os.path.join(BASE, "masks")) + _files(os.path.join(BASE, "frames"))
+        if key == "dragout":
+            return _files(os.path.join(BASE, "drag-out"))
         if key == "logs":
             out = _files(os.path.join(BASE, "logs"))
             if ins:

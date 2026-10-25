@@ -513,9 +513,9 @@ class Vault:
         fix_times(folder)
         return blob
 
-    def add(self, data, meta, thumb=None):
+    def add(self, data, meta, thumb=None, store=None):
         """Puts bytes (a picture or video) into the vault with its details. Returns the new entry."""
-        return self._add(iter([data]), meta, thumb, len(data))
+        return self._add(iter([data]), meta, thumb, len(data), store)
 
     def add_file(self, path, meta, thumb=None, store=None):
         def chunks():

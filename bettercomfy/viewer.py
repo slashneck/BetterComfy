@@ -1,8 +1,9 @@
 """The big viewer: a picture (or video) over the whole window. Click: zoom in where you clicked / back to fit,
-wheel: zoom, drag: move around, ← →: the one before / after, Esc: close."""
+wheel: zoom, drag: move around, ← →: the one before / after, Esc: close. Videos play with their sound, a time bar and
+volume (vault videos straight from memory); GIFs get a frame bar. S: slideshow."""
 import os
 
-from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer, QVariantAnimation
+from PySide6.QtCore import QByteArray, QBuffer, QEasingCurve, QIODevice, QPointF, QRectF, Qt, QTimer, QUrl, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -37,6 +38,22 @@ class Viewer(QWidget):
         self.loader = _Loader()
         self.loader.done.connect(self._loaded)
         host.installEventFilter(self)
+        from .mediabar import MediaBar
+        self.bar = MediaBar(self)
+        self.bar.hide()
+        self.bar.play_toggled.connect(self._toggle_play)
+        self.bar.seek.connect(self._seek)
+        self.bar.step.connect(self._step_frame)
+        self.bar.volume.connect(lambda v: self.audio and self.audio.setVolume(v / 100))
+        self.bar.muted.connect(lambda m: self.audio and self.audio.setMuted(m))
+        self.bar.loop.connect(self._set_loop)
+        self.bar.save_frame.connect(self._save_frame)
+        self.bar.edit.connect(self._edit)
+        self.player = self.audio = self.sink = None
+        self._buf = None
+        self._video = False
+        self._sized = False
+        self.slides = QTimer(self, singleShot=True, timeout=lambda: self.step(1))
 
     # ---------------------------------------------------------------- open / close
     def open(self, entries, idx, on_move=None):
@@ -53,11 +70,17 @@ class Viewer(QWidget):
 
     def close_view(self):
         self.timer.stop()
+        self.slides.stop()
+        self._stop_media()
+        self.bar.hide()
         self._fade_to(0.0)
 
     def forget(self):
         """The vault locked: decrypted pixels go at once, no fade."""
         self.timer.stop()
+        self.slides.stop()
+        self._stop_media()
+        self.bar.hide()
         self.frames, self.entries, self.pm = [], [], QPixmap()
         self._op = 0.0
         self.hide()
@@ -76,9 +99,151 @@ class Viewer(QWidget):
     def eventFilter(self, obj, e):
         if obj is self.host and e.type() == e.Type.Resize and self.isVisible():
             self.setGeometry(self.host.rect())
+            self._place_bar()
             if self.fit:
                 self._fit()
         return False
+
+    # ---------------------------------------------------------------- playing
+    def _place_bar(self):
+        w = min(820, self.width() - 180)
+        self.bar.setGeometry(int((self.width() - w) / 2), self.height() - 46 - 46, int(w), 46)
+
+    def _ensure_player(self):
+        if self.player is None:
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
+            self.player = QMediaPlayer(self)
+            self.audio = QAudioOutput(self)
+            self.audio.setVolume(self.bar.vol.value() / 100)
+            self.sink = QVideoSink(self)
+            self.player.setAudioOutput(self.audio)
+            self.player.setVideoSink(self.sink)
+            self.sink.videoFrameChanged.connect(self._vframe)
+            self.player.positionChanged.connect(self.bar.set_pos)
+            self.player.durationChanged.connect(self.bar.set_length)
+            self.player.hasAudioChanged.connect(self.bar.set_audio)
+            self.player.playbackStateChanged.connect(
+                lambda s: self.bar.set_playing(s == QMediaPlayer.PlaybackState.PlayingState))
+            self.player.errorOccurred.connect(self._media_error)
+        return self.player
+
+    def _play_video(self, e):
+        """A video with its sound. One in the vault is decrypted into memory and played from there."""
+        from PySide6.QtMultimedia import QMediaPlayer
+        p = self._ensure_player()
+        self._video, self._sized = True, False
+        self.bar.set_video(False)
+        self.bar.set_playing(True)
+        p.setLoops(QMediaPlayer.Loops.Infinite if self.bar.loop_btn.isChecked() and not self.slides.isActive() else 1)
+        if e.get("vault"):
+            from .vault import vault
+            data = vault.read(e)
+            self._buf = QBuffer(self)
+            self._buf.setData(QByteArray(data))
+            self._buf.open(QIODevice.OpenModeFlag.ReadOnly)
+            p.setSourceDevice(self._buf, QUrl(f"memory.{e.get('fmt') or 'mp4'}"))
+        else:
+            p.setSource(QUrl.fromLocalFile(e["file"]))
+        p.play()
+        self._place_bar()
+        self.bar.show()
+        self.bar.raise_()
+
+    def _stop_media(self):
+        self._video = False
+        if self.player is not None:
+            self.player.stop()
+            self.player.setSource(QUrl())
+        if self._buf is not None:
+            self._buf.close()
+            self._buf.setData(QByteArray())         # the decrypted video leaves memory
+            self._buf.deleteLater()
+            self._buf = None
+
+    def _vframe(self, frame):
+        if not self._video:
+            return
+        img = frame.toImage()
+        if img.isNull():
+            return
+        self.pm = QPixmap.fromImage(img)
+        if not self._sized:                     # the first frame: fitted to the window
+            self._sized = True
+            self._fit()
+        self.update()
+
+    def _media_error(self, *_):
+        """Qt could not play it: the old way (its frames, no sound)."""
+        e = self.cur()
+        if e is None or not self._video:
+            return
+        self._stop_media()
+        self.bar.hide()
+        self.loader.load(e["id"], None if e.get("vault") else e["file"], e if e.get("vault") else None)
+
+    def _toggle_play(self):
+        if self._video and self.player is not None:
+            from PySide6.QtMultimedia import QMediaPlayer
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.player.pause()
+            else:
+                self.player.play()
+        elif self.frames:
+            if self.timer.isActive():
+                self.timer.stop()
+            else:
+                self.timer.start(int(1000 / self.fps))
+            self.bar.set_playing(self.timer.isActive())
+
+    def _seek(self, v):
+        if self._video and self.player is not None:
+            self.player.setPosition(int(v))
+        elif self.frames:
+            self.fi = max(0, min(int(v), len(self.frames) - 1))
+            self.pm = self.frames[self.fi]
+            self.update()
+
+    def _step_frame(self, d):
+        if self._video and self.player is not None:
+            self.player.pause()
+            self.player.setPosition(max(0, self.player.position() + d * 1000 // 16))
+        elif self.frames:
+            self.timer.stop()
+            self.bar.set_playing(False)
+            self._seek(self.fi + d)
+            self.bar.set_pos(self.fi)
+
+    def _set_loop(self, on):
+        if self.player is not None:
+            from PySide6.QtMultimedia import QMediaPlayer
+            self.player.setLoops(QMediaPlayer.Loops.Infinite if on else 1)
+
+    def _save_frame(self):
+        e = self.cur()
+        app = getattr(self, "app", None)
+        if e is None or app is None or not self.pm or self.pm.isNull():
+            return
+        app.save_frame(e, self.pm.toImage())
+
+    def _edit(self):
+        e = self.cur()
+        app = getattr(self, "app", None)
+        if e is not None and app is not None:
+            if self._video and self.player is not None:
+                self.player.pause()
+            app.edit_entry(e)
+
+    def toggle_slides(self):
+        if self.slides.isActive():
+            self.slides.stop()
+        else:
+            self._next_slide()
+        self.update()
+
+    def _next_slide(self):
+        e = self.cur()
+        moving = e is not None and (e.get("kind") == "video" or media.is_gif(e))
+        self.slides.start(9000 if moving else 4000)
 
     # ---------------------------------------------------------------- content
     def cur(self):
@@ -88,6 +253,10 @@ class Viewer(QWidget):
         e = self.cur()
         self.timer.stop()
         self.frames = []
+        self._stop_media()
+        self.bar.hide()
+        if self.slides.isActive():
+            self._next_slide()
         if e is None:
             return
         if e.get("vault"):
@@ -98,16 +267,20 @@ class Viewer(QWidget):
                 self.pm.loadFromData(vault.read(e, "thumb_blob" if e.get("kind") == "video" else "blob") or b"")
             except Exception:
                 pass
-            if e.get("kind") == "video":
-                self.loader.load(e["id"], None, e)
-            elif media.is_gif(e):
+            if media.is_gif(e):
                 self.loader.load(e["id"], None, gif=e)
+            elif e.get("kind") == "video":
+                self._fit()
+                self._play_video(e)
+                return
         elif media.is_gif(e):
             self.pm = QPixmap(e["file"])
             self.loader.load(e["id"], e["file"], gif=e)
         elif e.get("kind") == "video":
             self.pm = QPixmap(e.get("thumb") or "")
-            self.loader.load(e["id"], e["file"])
+            self._fit()
+            self._play_video(e)
+            return
         else:
             self.pm = QPixmap(e["file"])
         self._fit()
@@ -121,11 +294,18 @@ class Viewer(QWidget):
         self.pm = self.frames[0]
         self._fit()
         self.timer.start(int(1000 / self.fps))
+        self.bar.set_gif(len(self.frames))
+        self.bar.set_playing(True)
+        self._place_bar()
+        self.bar.show()
+        self.bar.raise_()
 
     def _next_frame(self):
         if self.frames:
             self.fi = (self.fi + 1) % len(self.frames)
             self.pm = self.frames[self.fi]
+            if self.bar.isVisible():
+                self.bar.set_pos(self.fi)
             self.update()
 
     def drop(self, ids):
@@ -162,7 +342,7 @@ class Viewer(QWidget):
 
     # ---------------------------------------------------------------- zoom
     def _area(self):
-        return QRectF(self.rect()).adjusted(70, 64, -70, -54)
+        return QRectF(self.rect()).adjusted(70, 64, -70, -110 if self.bar.isVisible() or self._video else -54)
 
     def _fit_scale(self):
         if not self.pm or self.pm.isNull():
@@ -302,8 +482,16 @@ class Viewer(QWidget):
             self.step(-1)
         elif k in (Qt.Key.Key_Right, Qt.Key.Key_D):
             self.step(1)
-        elif k == Qt.Key.Key_Space and self.frames:
-            self.timer.stop() if self.timer.isActive() else self.timer.start(int(1000 / self.fps))
+        elif k == Qt.Key.Key_Space and (self.frames or self._video):
+            self._toggle_play()
+        elif k in (Qt.Key.Key_Comma, Qt.Key.Key_Period) and (self.frames or self._video):
+            self._step_frame(-1 if k == Qt.Key.Key_Comma else 1)
+        elif k == Qt.Key.Key_M and self._video:
+            self.bar._toggle_mute()
+        elif k == Qt.Key.Key_E and self.cur():
+            self._edit()
+        elif k == Qt.Key.Key_S:
+            self.toggle_slides()
         elif k in (Qt.Key.Key_0, Qt.Key.Key_F):
             self._fit()
         elif k in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
@@ -354,10 +542,12 @@ class Viewer(QWidget):
             info = f"{self.idx + 1} / {len(self.entries)}    {e.get('w')} × {e.get('h')}    {zoom}"
             fm = QFontMetrics(f)
             p.drawText(QPointF(self.width() - 80 - fm.horizontalAdvance(info), 35), info)
-            hint = ("Click: zoom   ·   Wheel: zoom   ·   ← →: before / after   ·   F: favourite   ·   X: mark for "
-                    "deletion   ·   Esc: close")
-            if self.frames:
-                hint += "   ·   Space: pause"
+            hint = ("Click: zoom   ·   ← →: before / after   ·   F: favourite   ·   X: mark   ·   E: edit   ·   "
+                    "S: slideshow   ·   Esc: close")
+            if self.frames or self._video:
+                hint += "   ·   Space: pause   ·   , .: frame"
+            if self.slides.isActive():
+                hint = "Slideshow   ·   S: stop   ·   " + hint
             p.setPen(QColor(T.TEXT3))
             p.drawText(QRectF(0, self.height() - 34, self.width(), 20), Qt.AlignmentFlag.AlignCenter, hint)
         # favourite / marked

@@ -72,8 +72,10 @@ memory, stop ComfyUI, close the app, sleep or shut down.
 upscale from there. Pictures keep their settings inside the file, and dropping one onto ComfyUI opens its workflow.
 Favourite with F, mark with X and delete everything marked at once (favourites are never deleted), sort by date, type,
 model or LoRA, filter and search, and keep pictures in collections with sub-collections (also smart ones that fill
-themselves by model or LoRA). GIFs play in a loop at a speed you set. Bring in pictures and videos from a folder or
-another app by dropping them onto the gallery.
+themselves by model or LoRA). Videos play with their sound, a time bar and volume in the big viewer, GIFs loop at a
+speed you set and can be gone through frame by frame, and a slideshow runs through it all. Trim, crop, turn and mirror
+pictures, GIFs and videos, or save a frame as a picture: always as a new one next to the original. Drag pictures in
+from a folder or another app, and out again, vault ones included.
 
 **A vault.** Pictures and videos that only open with your password, encrypted with Argon2id and AES-256-GCM and only
 ever decrypted in memory. Turn on Private next to Generate and the result goes straight into the vault, without a copy
