@@ -29,7 +29,7 @@ build or ComfyUI Desktop), starts it when needed and reads your models, LoRAs an
 
 **Pictures.** SDXL, Pony, Illustrious, SD 1.5, Flux, Qwen-Image, Anima, Z-Image and Krea 2. Better Comfy reads what a model is
 from inside the file and sets the size, steps, sampler, guidance, clip skip and the usual quality words for it. Five
-presets from Ultra Fast to Best, with an upscale pass for the top two. Speed models (Lightning, Hyper, DMD2, Turbo) are
+presets from Ultra Fast to Best, and a switch to enhance every picture afterwards. Speed models (Lightning, Hyper, DMD2, Turbo) are
 spotted and run with few steps by themselves. Every fine control is still there under Advanced.
 
 **Videos.** WAN 2.2 and 2.1, from a picture or from words only. Seamless loops that find the smoothest loop point and

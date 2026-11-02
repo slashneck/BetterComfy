@@ -204,7 +204,7 @@ IMAGE_PRESETS = [
     ("ultra", "Ultra Fast", "Drafts in seconds - for finding the prompt.", 12, 0.85, "euler_ancestral", "normal", None),
     ("fast", "Fast", "Good everyday quality, quick.", 18, 0.9, "euler_ancestral", "normal", None),
     ("balanced", "Balanced", "Cleaner details, still quick.", 26, 1.0, "dpmpp_2m", "karras", None),
-    ("quality", "Quality", "Upscaled pass for crisp detail.", 28, 1.0, "dpmpp_2m", "karras", (1.5, 14, 0.40)),
+    ("quality", "Quality", "More steps: finer and cleaner.", 28, 1.0, "dpmpp_2m", "karras", (1.5, 14, 0.40)),
     ("best", "Best", "Maximum detail - the slowest.", 34, 1.0, "dpmpp_2m_sde", "karras", (1.5, 20, 0.45)),
 ]
 IMAGE_PRESET = {p[0]: p for p in IMAGE_PRESETS}
@@ -221,7 +221,7 @@ IMAGE_DEFAULT = {
     "ckpt": "", "model_src": "ckpt", "family": "auto", "prompt": "", "negative": "", "auto_negative": True,
     "quality_tags": True, "loras": [], "aspect": "2:3", "size_mode": "aspect", "width": 832, "height": 1216,
     "megapixels": 1.0, "preset": "balanced", "steps": 0, "cfg": 0.0, "sampler": "", "scheduler": "", "clip_skip": 0,
-    "hires": "preset", "hires_scale": 1.5, "hires_denoise": 0.4, "hires_steps": 0, "upscale_model": "auto", "vae": "",
+    "hires": "off", "hires_scale": 1.5, "hires_denoise": 0.4, "hires_steps": 0, "upscale_model": "auto", "vae": "",
     "te1": "", "te2": "", "evae": "", "guidance": 0.0, "dtype": "default",
     "count": 1, "seed": -1, "init_image": "", "denoise": 0.6,
     # operations on a picture that exists: op = generate | upscale | inpaint
@@ -296,11 +296,11 @@ def image_plan(p, kind=None, src_size=None):
     cfg = float(p.get("cfg") or 0) or cfg
     sampler = p.get("sampler") or sampler
     sched = p.get("scheduler") or sched
-    hmode = p.get("hires", "preset")
-    if hmode == "on":
-        hires = (float(p.get("hires_scale") or 1.5), int(p.get("hires_steps") or 0) or (hires[1] if hires else 14),
+    # enhancing afterwards is a switch of its own (Quality card), not part of the preset
+    if p.get("hires") == "on":
+        hires = (float(p.get("hires_scale") or 1.5), int(p.get("hires_steps") or 0) or max(4, steps // 2),
                  float(p.get("hires_denoise") or 0.4))
-    elif hmode == "off":
+    else:
         hires = None
     op = p.get("op", "generate")
     img2img = op == "generate" and bool(p.get("init_image"))

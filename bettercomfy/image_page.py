@@ -163,10 +163,11 @@ class ImagePage(QWidget):
         self.clip_skip.setRange(0, 12)
         self.clip_skip.setSpecialValueText("Family")
         self.clip_skip.valueChanged.connect(lambda v: self._set("clip_skip", int(v)))
-        self.hires = Segmented([("preset", "Preset", "On for Quality and Best"), ("on", "On", "Always"),
-                                ("off", "Off", "Never")], lambda v: self._set("hires", v), height=30)
+        self.enhance = ToggleRow("Enhance after generating", "Draws every picture again bigger, with finer detail. "
+                                 "Takes much longer. A picture you like can also be enhanced later (Upscale).",
+                                 bool(cfg.get("image_enhance", False)), self._enhance)
         self.hires_scale = Slider(1.1, 2.5, 0.05, 2, 1.5, lambda v: self._set("hires_scale", v), "×", width=70)
-        self.hires_den = Slider(0.1, 0.8, 0.01, 2, 0.4, lambda v: self._set("hires_denoise", v), width=70)
+        self.hires_den = Slider(0.05, 1.0, 0.01, 2, 0.4, lambda v: self._set("hires_denoise", v), width=70)
         self.upscaler = Combo()
         self.upscaler.currentIndexChanged.connect(lambda _=0: self._set("upscale_model", self.upscaler.currentData()))
         self.vae = Combo()
@@ -179,14 +180,15 @@ class ImagePage(QWidget):
                      field("Guidance", self.cfgs, "CFG: how strictly it follows the prompt. 0 = the preset's.", label_w=lw),
                      field("Sampler", self.sampler, label_w=lw), field("Scheduler", self.scheduler, label_w=lw),
                      self.clip_row,
-                     field("Upscale pass", self.hires, "Draws the picture again bigger, adding fine detail.", label_w=lw),
-                     field("Scale", self.hires_scale, label_w=lw),
-                     field("Strength", self.hires_den, "How much the upscale pass may change (0.3 - 0.5).", label_w=lw),
+                     field("Enhance size", self.hires_scale, "How much bigger Enhance after generating makes it.",
+                           label_w=lw),
+                     field("Enhance change", self.hires_den, "How much enhancing may change the picture (0.3 - 0.5 "
+                                                             "keeps it, more redraws it).", label_w=lw),
                      field("Upscaler", self.upscaler, "The model that enlarges the picture first (an anime one for "
                                                       "anime).", label_w=lw),
                      self.vae_row)
         c = Card("Quality")
-        c.add(self.preset, self.preset_line, self.adv)
+        c.add(self.preset, self.preset_line, self.enhance, self.adv)
         sc.add(c)
 
         # seed + start picture
@@ -194,10 +196,14 @@ class ImagePage(QWidget):
         self.seed.changed.connect(lambda: self._set("seed", self.seed.value()))
         self.init = ImageDrop("Drop a picture to start from (optional)", 150)
         self.init.changed.connect(lambda path: self._set("init_image", path))
-        self.denoise = Slider(0.05, 1.0, 0.01, 2, 0.6, lambda v: self._set("denoise", v), width=70)
+        self.denoise = Slider(0.01, 1.0, 0.01, 2, 0.6, self._denoise, width=70)
+        self.denoise_line = label("", "Faint", wrap=True)
+        change_chips = ChipBox(5)
+        for text, v in (("A touch", 0.15), ("A little", 0.35), ("Medium", 0.55), ("A lot", 0.75), ("Only the idea", 0.9)):
+            change_chips.add(chip(text, lambda _=False, v=v: (self.denoise.set(v), self._denoise(v)), False))
         self.init_box = Collapsible("Start from a picture", False, "Picture to picture (img2img)")
-        self.init_box.add(self.init, field("Change", self.denoise, "How much of the picture may change: low keeps it, "
-                                                                     "high only keeps the idea.", label_w=60))
+        self.init_box.add(self.init, field("How much may change", self.denoise, stacked=True), change_chips,
+                          self.denoise_line)
         c = Card("Seed & start picture")
         c.add(self.seed, self.init_box)
         sc.add(c)
@@ -239,6 +245,21 @@ class ImagePage(QWidget):
             self._update()
         self._save_timer.start()
 
+    def _enhance(self, on):
+        cfg.set("image_enhance", bool(on))
+        self._set("hires", "on" if on else "off")
+
+    def _denoise(self, v):
+        self._denoise_text(v)
+        self._set("denoise", float(v))
+
+    def _denoise_text(self, v):
+        self.denoise_line.setText("Nearly the same picture." if v < 0.2 else
+                                  "Same picture, small changes." if v < 0.45 else
+                                  "Same layout and colours, redrawn." if v < 0.7 else
+                                  "Rough layout only, mostly new." if v < 0.92 else
+                                  "Almost nothing of the picture stays.")
+
     def _save(self):
         keep = dict(self.p)
         cfg.set("image_state", keep)
@@ -269,7 +290,7 @@ class ImagePage(QWidget):
         set_combo(self.sampler, p.get("sampler", ""))
         set_combo(self.scheduler, p.get("scheduler", ""))
         quiet(self.clip_skip, self.clip_skip.setValue, int(p.get("clip_skip") or 0))
-        self.hires.set(p.get("hires", "preset"), animate=False)
+        self.p["hires"] = "on" if cfg.get("image_enhance", False) else "off"       # a switch of its own: it stays
         self.hires_scale.set(float(p.get("hires_scale") or 1.5))
         self.hires_den.set(float(p.get("hires_denoise") or 0.4))
         set_combo(self.upscaler, p.get("upscale_model", "auto"))
@@ -279,6 +300,7 @@ class ImagePage(QWidget):
         if p.get("init_image"):
             self.init_box.set_open(True)
         self.denoise.set(float(p.get("denoise", 0.6)))
+        self._denoise_text(float(p.get("denoise", 0.6)))
         self.bar.set_private(p.get("private", False))
         self._loading = False
         self._update()
@@ -474,14 +496,13 @@ class ImagePage(QWidget):
         if hasattr(self.quality_tags, "sub"):
             self.quality_tags.sub.setText(F["quality"] or "Plain SDXL needs none.")
         pr = W.IMAGE_PRESET[self.p.get("preset", "balanced")]
-        hires = f"  ·  upscale ×{pl['hires'][0]:g}" if pl["hires"] else ""
+        hires = f"  ·  enhance ×{pl['hires'][0]:g}" if pl["hires"] else ""
         self.preset_line.setText(f"{pr[2]}\n{pl['steps']} steps  ·  {pl['sampler']} / {pl['scheduler']}  ·  "
                                  f"guidance {pl['cfg']:g}{hires}")
         self.preview.set(pl["w"], pl["h"], pl["final_w"], pl["final_h"], F["base"],
                          "picture to picture" if pl["img2img"] else "")
-        on = self.p.get("hires", "preset")
         for w in (self.hires_scale, self.hires_den):
-            w.setEnabled(on == "on")
+            w.setEnabled(self.p.get("hires") == "on")
         self._update_bar(pl)
 
     def _update_bar(self, pl=None):

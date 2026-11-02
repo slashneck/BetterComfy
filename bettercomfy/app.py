@@ -4,11 +4,11 @@ import os
 import sys
 import threading
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QVariantAnimation, QPoint, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QImage, QKeySequence,
                            QPalette, QShortcut)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDialog, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDialog, QHBoxLayout,
                                QMainWindow, QScrollArea, QSlider, QStyleFactory, QMenu, QMessageBox,
                                QSystemTrayIcon, QVBoxLayout, QWidget)
 
@@ -1427,19 +1427,52 @@ class CaptureGuard(QObject):
         return False
 
 
+WHEEL_PIXELS = 70                       # how far one tick of the mouse wheel scrolls
+
+
 class WheelGuard(QObject):
-    """The mouse wheel never changes a setting it happens to be over - it scrolls the page instead."""
+    """The mouse wheel scrolls a short way per tick and glides there, everywhere in the app. It never changes a setting
+    it happens to be over - it scrolls the page instead."""
 
     def eventFilter(self, obj, e):
-        if e.type() == QEvent.Type.Wheel and isinstance(obj, (QComboBox, QAbstractSpinBox, QSlider)):
+        if e.type() != QEvent.Type.Wheel:
+            return False
+        if isinstance(obj, (QComboBox, QAbstractSpinBox, QSlider)):
             w = obj.parentWidget()
             while w is not None and not isinstance(w, QAbstractScrollArea):
                 w = w.parentWidget()
             if w is not None:
-                sb = w.verticalScrollBar()
-                sb.setValue(sb.value() - int(e.angleDelta().y() / 120 * max(20, sb.singleStep()) * 3))
+                self._scroll(w, e.angleDelta().y())
+            return True
+        area = obj.parent() if isinstance(obj, QWidget) else None
+        if isinstance(area, QAbstractScrollArea) and area.viewport() is obj and e.angleDelta().y() and \
+                not e.modifiers() and area.verticalScrollBar().maximum() > 0:
+            self._scroll(area, e.angleDelta().y())
+            e.accept()
             return True
         return False
+
+    def _scroll(self, area, delta):
+        if isinstance(area, QAbstractItemView):
+            area.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        sb = area.verticalScrollBar()
+        anim = getattr(area, "_wheel_anim", None)
+        running = anim is not None and anim.state() == QVariantAnimation.State.Running
+        start = area._wheel_target if running else sb.value()
+        target = max(sb.minimum(), min(sb.maximum(), int(start - delta / 120 * WHEEL_PIXELS)))
+        if not cfg.get("animations", True):
+            sb.setValue(target)
+            return
+        if anim is None:
+            anim = area._wheel_anim = QVariantAnimation(area)
+            anim.setDuration(170)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.valueChanged.connect(lambda v, sb=sb: sb.setValue(int(v)))
+        anim.stop()
+        area._wheel_target = target
+        anim.setStartValue(sb.value())
+        anim.setEndValue(target)
+        anim.start()
 
 
 def _palette(app):
