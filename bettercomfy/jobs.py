@@ -1,9 +1,11 @@
 """The generation queue: pictures and videos one after the other, live progress and previews, learned time estimates,
 kept across restarts. The work itself runs in a background thread; everything shown runs in the main thread."""
 import copy
+import glob
 import io
 import json
 import re
+import shutil
 import os
 import threading
 import time
@@ -218,6 +220,12 @@ def sweep_leftovers(install):
     from . import shred
     for n in names:
         shred.shred_file(os.path.join(d, n))
+    # the pictures of a training run that was cut off
+    for f in glob.glob(os.path.join(d, "bc_train_*")):
+        if os.path.getmtime(f) < _STARTED:
+            for pic in glob.glob(os.path.join(f, "*")):
+                shred.shred_file(pic)
+            shutil.rmtree(f, ignore_errors=True)
     return len(names)
 
 
@@ -306,6 +314,13 @@ def _run_image(ctx, job, c, p, op, src, lists, private, trail):
         ctx.progress(0.0, "Handing the start picture over")
         init = trail.upload(ref_bytes(p["init_image"]), f"bc_init_{job['id']}.png")
     ups = c.choices("UpscaleModelLoader", "model_name") if c.has("UpscaleModelLoader") else []
+    if op == "generate" and p.get("character"):
+        from . import charlib
+        ctx.progress(0.0, "Handing the character over")
+        try:
+            p = charlib.prepare(p, c, trail.upload)
+        except RuntimeError as ex:
+            raise comfy.ComfyError(str(ex))
     todo = _variants(p)
     n = len(todo)
     base_seed = int(p.get("seed", -1))

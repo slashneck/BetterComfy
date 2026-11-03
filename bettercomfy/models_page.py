@@ -183,6 +183,7 @@ class CheckpointsPage(QWidget):
             from .market import MarketView
             self.market = MarketView(self.app, self.switches[1], "Checkpoint", "models/checkpoints",
                                      ("checkpoints", "unet"), self._from_market, what="checkpoint")
+            self.market.dl_changed.connect(self._dl_tile)
             self.stack.addWidget(self.market)
         self.stack.setCurrentWidget(self.market if key == "market" else self.stack.widget(0))
         if key == "lib" and self._dirty:
@@ -229,6 +230,8 @@ class CheckpointsPage(QWidget):
 
     # ---- listing
     def _models_changed(self, _lists):
+        if self.market is not None:
+            self.market.finishing.clear()       # the new files are in the list now
         self._icons.clear()
         if self.isVisible() and self.stack.currentIndex() == 0:
             self.fill()
@@ -239,6 +242,31 @@ class CheckpointsPage(QWidget):
         super().showEvent(e)
         if self._dirty or not self.grid.count():
             self.fill()
+
+    # ---- downloads from the Market: in the library at once, with their progress
+    def _dl_tiles(self):
+        if self.market is None:
+            return
+        for vid in list(self.market.dls) + list(self.market.finishing):
+            self._dl_tile(vid)
+
+    def _dl_tile(self, vid):
+        key = f"dl:{vid}"
+        item = next((self.grid.item(i) for i in range(self.grid.count())
+                     if self.grid.item(i).data(Qt.ItemDataRole.UserRole) == key), None)
+        info = self.market.dl_info(vid)
+        if info is None:
+            if item is not None:
+                self.grid.takeItem(self.grid.row(item))
+            return
+        if item is None:
+            item = QListWidgetItem(info["name"])
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.grid.insertItem(0, item)
+        item.setIcon(self.market.dl_icon(info))
+        item.setText(f"{info['line']}  ·  {info['name']}")
+        item.setToolTip(f"{info['name']}\n{info['detail']}")
 
     def _keys(self):
         out = [ckpts.key("ckpt", n) for n in self.link.lists.get("checkpoints") or []]
@@ -381,6 +409,7 @@ class CheckpointsPage(QWidget):
             if k == keep:
                 self.grid.setCurrentItem(it)
         self.grid.blockSignals(False)
+        self._dl_tiles()
         self.count.setText(f"{len(rows)} of {len(keys)}")
         if not keys:
             self.name.setText("No models found")

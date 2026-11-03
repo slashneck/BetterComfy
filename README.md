@@ -44,6 +44,14 @@ any picture bigger and sharper with its own model, prompt and seed, or just enla
 **Compare.** The same picture with one setting changed (seeds, guidance, steps, sampler, scheduler, preset, LoRA
 strength or model), side by side.
 
+**Characters.** Make a character from a few pictures of it and keep it in its own tab. On the Image page you pick it
+from a row of previews, say how close it should stay (free to 1-to-1) and it appears in whatever scene you write. It uses
+the LoRA you trained for it, its pictures through the optional Character reference add-on, or both.
+
+**Train.** Train a LoRA of your own in one tab: drop in pictures, give it a name and a trigger word, pick a model and
+press Start. It uses the training built into ComfyUI, so nothing extra is needed, and the result lands in your LoRA library
+and as a character. It works with SDXL, Pony, Illustrious and SD 1.5 models.
+
 **A LoRA library.** Every LoRA in your ComfyUI with what it was made for (Illustrious, Pony or plain SDXL told apart
 from the training details, and settable by hand), its trigger words (suggested from the file), notes, the page you got
 it from, a favourite strength and a preview picture. Sort them with tags (character, art style, pose, detailer and your
@@ -148,7 +156,8 @@ Everything you make stays on your PC. Better Comfy only talks to the ComfyUI on 
 itself only listens on this computer. There is no account, no telemetry and no upload. Better Comfy goes online to ask GitHub
 whether a new version exists (you can switch that off under Settings, Updates) and, only when you ask for it, to
 download prompt helper models or missing model parts once from Hugging Face and GitHub, to read a model's Civitai page
-when you press Fetch, and to talk to Civitai while the Market is open. Covers you see in the Market stay in memory and
+when you press Fetch, to talk to Civitai while the Market is open, and to fetch the Character reference add-on from
+GitHub and its models from Hugging Face if you choose to install it. Covers you see in the Market stay in memory and
 are never saved. A Civitai API key, if you add one, is kept encrypted for your Windows account and only sent to Civitai
 with downloads. The prompt helper itself runs on your PC.
 

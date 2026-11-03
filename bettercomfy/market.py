@@ -3,9 +3,11 @@ ComfyUI's folder with the link, trigger words, cover and what it is made for fil
 and you browse; the covers you see stay in memory and are never written to the drive."""
 import collections
 import html
+import os
 import queue
 import re
 import threading
+import time
 
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPainterPath, QPixmap
@@ -91,8 +93,9 @@ class MarketView(QWidget):
     list_key: the link's model list that tells what is there already; on_downloaded(name, model, version, host)
     fills in the notes after a download."""
     _page = Signal(int, object, object)
-    _dl_prog = Signal(int, int, int)
+    _dl_prog = Signal(int, object, object)      # objects: sizes over 2 GB don't fit a Qt int
     _dl_done = Signal(int, object)
+    dl_changed = Signal(int)                    # a download started, moved on or ended (the library shows it)
     _detail = Signal(int, object)
 
     def __init__(self, app, switch, kind="LORA", folder="models/loras", list_key="loras", on_downloaded=None,
@@ -107,7 +110,8 @@ class MarketView(QWidget):
         self.gen = 0
         self.cur = None
         self.revealed = None
-        self.dls = {}               # version id -> {"cancel": Event, "done": int, "total": int, "model": id}
+        self.dls = {}               # version id -> {"cancel", "done", "total", "model", "name", "cover", "t0"}
+        self.finishing = {}         # version id -> what dl_info needs, until the library lists the new file
         self.thumbs = _Thumbs()
         self.thumbs.ready.connect(self._thumb_ready)
         self._icons = {}
@@ -623,8 +627,11 @@ class MarketView(QWidget):
         host = m.get("_host") or self.host()
         key = C.api_key()
         ev = threading.Event()
-        self.dls[v["id"]] = {"cancel": ev, "done": 0, "total": int(float((C.model_file(v) or {}).get("sizeKB") or 0) * 1024),
-                             "model": m["id"]}
+        f = C.model_file(v) or {}
+        self.dls[v["id"]] = {"cancel": ev, "done": 0, "total": int(float(f.get("sizeKB") or 0) * 1024), "model": m["id"],
+                             "name": os.path.splitext(f.get("name") or "")[0] or m.get("name") or "?",
+                             "cover": self._cover_of(m, v)[0], "t0": time.time(), "hidden": self._hidden(m)}
+        self.dl_changed.emit(v["id"])
 
         def work():
             try:
@@ -643,17 +650,72 @@ class MarketView(QWidget):
 
     def _progress(self, vid, done, total):
         d = self.dls.get(vid)
-        if d is not None:
-            d["done"], d["total"] = done, total or d["total"]
-        v = self._ver()
-        if v is None or v["id"] != vid or d is None:
+        if d is None:
             return
-        t = d["total"] or 0
-        self.bar.setValue(int(done * 1000 / t) if t else 0)
-        self.bar_lbl.setText(f"{done / 2 ** 20:.0f} of {t / 2 ** 20:.0f} MB" if t else f"{done / 2 ** 20:.0f} MB")
+        d["done"], d["total"] = done, total or d["total"]
+        self.dl_changed.emit(vid)
+        v = self._ver()
+        if v is None or v["id"] != vid:
+            return
+        info = self.dl_info(vid)
+        self.bar.setValue(int(info["frac"] * 1000))
+        self.bar_lbl.setText(info["detail"])
+
+    def dl_info(self, vid):
+        """How a download stands, for the bar here and its tile in the library. None: it is over."""
+        if vid in self.finishing:
+            return dict(self.finishing[vid], frac=1.0, line="Finishing…", detail="Downloaded, being added to the library")
+        d = self.dls.get(vid)
+        if d is None:
+            return None
+        done, t = d["done"], d["total"] or 0
+        frac = min(1.0, done / t) if t else 0.0
+        secs = max(0.5, time.time() - d["t0"])
+        speed = done / secs
+        size = f"{_size(done)} of {_size(t)}" if t else _size(done)
+        left = ""
+        if t and speed > 0 and done > 0:
+            m = (t - done) / speed
+            left = f"  ·  about {max(1, round(m / 60))} min left" if m >= 90 else f"  ·  {max(1, round(m))} s left"
+        return {"name": d["name"], "cover": d["cover"], "hidden": d.get("hidden"), "frac": frac,
+                "line": f"{frac * 100:.0f} %" if t else "Downloading…",
+                "detail": f"{frac * 100:.0f} %  ·  {size}  ·  {speed / 2 ** 20:.0f} MB/s{left}"}
+
+    def dl_icon(self, info):
+        """A library tile for a download: its cover, dimmed, with a bar and how far it is."""
+        s = 300
+        out = QPixmap(s, s)
+        out.fill(Qt.GlobalColor.transparent)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, s, s), 22, 22)
+        p.setClipPath(path)
+        p.fillRect(out.rect(), QColor(T.SURFACE2))
+        pm = self.thumbs.get(info.get("cover")) if info.get("cover") else None
+        if pm is not None and not pm.isNull():
+            pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+            if info.get("hidden"):
+                pm = blur_pixmap(pm, 14)
+            p.setOpacity(0.45)
+            p.drawPixmap((s - pm.width()) // 2, (s - pm.height()) // 2, pm)
+            p.setOpacity(1.0)
+        p.setClipping(False)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 40))
+        p.drawRoundedRect(QRectF(24, s / 2 - 7, s - 48, 14), 7, 7)
+        p.setBrush(T.accent())
+        p.drawRoundedRect(QRectF(24, s / 2 - 7, max(14, (s - 48) * info["frac"]), 14), 7, 7)
+        p.end()
+        out.setDevicePixelRatio(2.0)
+        return QIcon(out)
 
     def _finished(self, vid, res):
-        self.dls.pop(vid, None)
+        d = self.dls.pop(vid, None)
+        if d is not None and isinstance(res, dict):
+            self.finishing[vid] = {"name": d["name"], "cover": d["cover"], "hidden": d.get("hidden")}
+        self.dl_changed.emit(vid)
         if isinstance(res, C.Cancelled):
             self.app.toast("Download stopped.", "info")
         elif isinstance(res, C.NeedKey):
@@ -661,7 +723,6 @@ class MarketView(QWidget):
         elif isinstance(res, Exception):
             self.app.toast(str(res) if isinstance(res, C.FetchError) else f"The download failed: {res}", "warn")
         else:
-            import os
             name = os.path.basename(res["path"])
             if self.on_downloaded:
                 threading.Thread(target=self._after, args=(name, res), daemon=True).start()
@@ -729,6 +790,10 @@ class MarketView(QWidget):
         st = self.app.pages.get("settings")
         if st is not None and hasattr(st, "show_civitai"):
             st.show_civitai()
+
+
+def _size(n):
+    return f"{n / 2 ** 30:.2f} GB" if n >= 2 ** 30 else f"{n / 2 ** 20:.0f} MB"
 
 
 def _num(n):

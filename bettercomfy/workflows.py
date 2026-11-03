@@ -221,7 +221,7 @@ IMAGE_DEFAULT = {
     "ckpt": "", "model_src": "ckpt", "family": "auto", "prompt": "", "negative": "", "auto_negative": True,
     "quality_tags": True, "loras": [], "aspect": "2:3", "size_mode": "aspect", "width": 832, "height": 1216,
     "megapixels": 1.0, "preset": "balanced", "steps": 0, "cfg": 0.0, "sampler": "", "scheduler": "", "clip_skip": 0,
-    "hires": "off", "hires_scale": 1.5, "hires_denoise": 0.4, "hires_steps": 0, "upscale_model": "auto", "vae": "",
+    "character": "", "char_strength": 0.8, "hires": "off", "hires_scale": 1.5, "hires_denoise": 0.4, "hires_steps": 0, "upscale_model": "auto", "vae": "",
     "te1": "", "te2": "", "evae": "", "guidance": 0.0, "dtype": "default",
     "count": 1, "seed": -1, "init_image": "", "denoise": 0.6,
     # operations on a picture that exists: op = generate | upscale | inpaint
@@ -340,6 +340,8 @@ def final_prompts(p, plan, seed):
     rng = random.Random(seed)
     F = FAMILIES[plan["family"]]
     pos = expand_wildcards((p.get("prompt") or "").strip(), rng)
+    if p.get("_char_trigger"):
+        pos = p["_char_trigger"] + (", " + pos if pos else "")
     if p.get("quality_tags", True) and F["quality"]:
         low = pos.lower()
         if F["quality"].split(",")[0].strip().lower() not in low:
@@ -386,22 +388,47 @@ def pick_upscaler(options, family):
     return (two or pri)[0]
 
 
+def _all_loras(p):
+    """The LoRAs of a job, with the one of its character (Characters tab) if it has one."""
+    return list(p.get("loras") or []) + ([p["_char_lora"]] if p.get("_char_lora") else [])
+
+
+def _char_refs(g, p, model):
+    """The character's pictures through IP-Adapter: its look goes into every picture, whatever the scene."""
+    ipa = pick_part(g.client.choices("IPAdapterModelLoader", "ipadapter_file") if g.client is not None else [],
+                    ("plus_sdxl_vit-h", "sdxl_vit-h", "sdxl"))
+    loader = g.add("IPAdapterModelLoader", "Loading the character", 0.5, ipadapter_file=ipa or "")
+    vision = g.add("CLIPVisionLoader", clip_name=p.get("_char_vision") or "")
+    img = None
+    for name in p["_char_refs"]:
+        one = [g.add("LoadImage", image=name), 0]
+        img = one if img is None else [g.add("ImageBatch", image1=img, image2=one), 0]
+    return [g.add("IPAdapterAdvanced", "Adding the character", 0.5, model=model, ipadapter=[loader, 0], image=img,
+                  weight=float(p.get("_char_weight", 0.8)), weight_type="linear", combine_embeds="average",
+                  start_at=0.0, end_at=1.0, embeds_scaling="V only", clip_vision=[vision, 0]), 0]
+
+
 def _model(g, p, plan, lists):
     """Loaders for any engine -> (model, clip, vae) references, LoRAs applied."""
     fam, eng = plan["family"], plan["engine"]
     F = FAMILIES[fam]
+    if p.get("_char_refs") and (eng != "sd" or fam == "sd15") and not p.get("_char_lora"):
+        raise RuntimeError("A character's pictures work with SDXL, Pony and Illustrious models. For this model, train "
+                           "a LoRA of it (Train tab).")
     if eng == "sd":
         ck = g.add("CheckpointLoaderSimple", "Loading the model", 3.0, ckpt_name=p["ckpt"])
         model, clip, vae = [ck, 0], [ck, 1], [ck, 2]
         if p.get("vae"):
             vae = [g.add("VAELoader", vae_name=p["vae"]), 0]
-        for lo in p.get("loras") or []:
+        for lo in _all_loras(p):
             if not lo.get("on", True) or not lo.get("file") or not float(lo.get("strength", 1.0)):
                 continue
             s = float(lo.get("strength", 1.0))
             k = g.add("LoraLoader", "Adding LoRAs", 0.3, model=model, clip=clip, lora_name=lo["file"],
                       strength_model=s, strength_clip=s)
             model, clip = [k, 0], [k, 1]
+        if p.get("_char_refs") and fam != "sd15":
+            model = _char_refs(g, p, model)
         if plan["clip_skip"] > 1:
             clip = [g.add("CLIPSetLastLayer", clip=clip, stop_at_clip_layer=-int(plan["clip_skip"])), 0]
         return model, clip, vae
@@ -421,7 +448,7 @@ def _model(g, p, plan, lists):
     else:
         clip = [g.add("CLIPLoader", "Loading the text encoder", 1.0, clip_name=te1, type=F["clip_type"]), 0]
     vae = [g.add("VAELoader", vae_name=evae), 0]
-    for lo in p.get("loras") or []:
+    for lo in _all_loras(p):
         if not lo.get("on", True) or not lo.get("file") or not float(lo.get("strength", 1.0)):
             continue
         model = [g.add("LoraLoaderModelOnly", "Adding LoRAs", 0.3, model=model, lora_name=lo["file"],

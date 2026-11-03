@@ -406,7 +406,7 @@ class SettingsPage(QWidget):
                         lambda v: cfg.set("animations", v)))
         self.start_page = Combo()
         for k, t in (("image", "Image"), ("video", "Video"), ("queue", "Queue"), ("gallery", "Gallery"),
-                     ("loras", "LoRAs")):
+                     ("loras", "LoRAs"), ("characters", "Characters")):
             self.start_page.addItem(t, k)
         set_combo(self.start_page, cfg.get("start_page"))
         self.start_page.currentIndexChanged.connect(lambda _=0: cfg.set("start_page", self.start_page.currentData()))

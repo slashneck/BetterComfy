@@ -54,6 +54,14 @@ https://github.com/hynek/argon2-cffi. It includes the Argon2 reference implement
 `assets\tags\danbooru.csv` is the Danbooru tag list from a1111-sd-webui-tagcomplete,
 Copyright (c) 2022 Dominik Reh, MIT license. https://github.com/DominikDoom/a1111-sd-webui-tagcomplete
 
+## Downloaded only when you install Character reference
+
+Not part of Better Comfy and not bundled with it. If you choose to install it, these are fetched in one fixed, checked
+version into your ComfyUI, and can be taken out again in the Characters tab.
+
+- ComfyUI_IPAdapter_plus, Copyright (c) cubiq (Matteo Spinelli), GPL-3.0. https://github.com/cubiq/ComfyUI_IPAdapter_plus
+- IP-Adapter models from Tencent AI Lab (h94/IP-Adapter), Apache-2.0. https://huggingface.co/h94/IP-Adapter
+
 ## Downloaded only when you set up the prompt helper
 
 These are not included. If you set up the prompt helper in Settings, Better Comfy downloads them to the folder you pick

@@ -3,8 +3,9 @@ import copy
 import json
 import os
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtWidgets import (QDoubleSpinBox, QHBoxLayout, QListWidget, QListWidgetItem, QSpinBox, QVBoxLayout,
+                               QWidget)
 
 from . import assistant, jobs, media, workflows as W
 from .components import GenerateBar, LoraStack, PromptCard, ResultPane, SeedBox, UserPresets, remember_prompt
@@ -110,6 +111,27 @@ class ImagePage(QWidget):
         self.loras = LoraStack("image", self.prompt, self._target, self.link.install)
         self.loras.changed.connect(lambda: self._set("loras", self.loras.value()))
         sc.add(Card("LoRAs").add(self.loras))
+
+        # character (made in the Characters tab): pick it, it appears in any scene
+        self.char_list = QListWidget()
+        self.char_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.char_list.setFlow(QListWidget.Flow.LeftToRight)
+        self.char_list.setWrapping(False)
+        self.char_list.setMovement(QListWidget.Movement.Static)
+        self.char_list.setIconSize(QSize(72, 72))
+        self.char_list.setGridSize(QSize(84, 104))
+        self.char_list.setFixedHeight(116)
+        self.char_list.setStyleSheet("QListWidget::item { padding: 3px; border-radius: 10px; color: #D4D4D8; }"
+                                     "QListWidget::item:selected { background: #2A2A30; }")
+        self.char_list.itemClicked.connect(self._char_clicked)
+        self.char_strength = Slider(0.0, 1.0, 0.01, 2, 0.8, lambda v: self._set("char_strength", float(v)), width=70)
+        self.char_row = field("Free ↔ 1-to-1", self.char_strength, "How close to the character: low only loosely like "
+                                                                    "it, high as close as it gets.", label_w=92)
+        self.char_note = label("", "Faint", wrap=True)
+        self.char_card = Card("Character", [icon_button("settings", lambda: self.app_go("characters"),
+                                                        "Characters: make and change them", size=15)])
+        self.char_card.add(self.char_list, self.char_row, self.char_note)
+        sc.add(self.char_card)
 
         # size
         self.aspects = ChipBox(6)
@@ -245,6 +267,63 @@ class ImagePage(QWidget):
             self._update()
         self._save_timer.start()
 
+    def app_go(self, key):
+        self.app.go(key)
+
+    def _fill_characters(self):
+        from . import charlib
+        from .characters_page import tile
+        self.char_list.clear()
+        chars = charlib.all_characters()
+        none = QListWidgetItem(tile(None, 144), "None")
+        none.setData(Qt.ItemDataRole.UserRole, "")
+        self.char_list.addItem(none)
+        cur = self.p.get("character") or ""
+        if cur and not charlib.get(cur):
+            cur = self.p["character"] = ""
+        for c in chars:
+            it = QListWidgetItem(tile(charlib.cover(c), 144), c["name"])
+            it.setData(Qt.ItemDataRole.UserRole, c["id"])
+            self.char_list.addItem(it)
+        for i in range(self.char_list.count()):
+            if self.char_list.item(i).data(Qt.ItemDataRole.UserRole) == cur:
+                self.char_list.setCurrentRow(i)
+        self.char_card.setVisible(bool(chars))
+        self._char_ui()
+
+    def _char_clicked(self, it):
+        self.pick_character(it.data(Qt.ItemDataRole.UserRole))
+
+    def pick_character(self, cid):
+        from . import charlib
+        c = charlib.get(cid or "")
+        self.p["character"] = cid or ""
+        if c:
+            self.p["char_strength"] = float(c.get("strength", 0.8))
+            self.char_strength.set(self.p["char_strength"])
+        self._fill_characters()
+
+    def _char_ui(self):
+        from . import charlib
+        c = charlib.get(self.p.get("character") or "")
+        self.char_row.setVisible(bool(c))
+        note = ""
+        if c:
+            fam = W.family_of(self.p, self._kind())
+            has_lora = bool(c.get("lora"))
+            if not has_lora and not charlib.addon_ready(self.link.install()):
+                note = "Needs the Character reference add-on (Characters tab), or a trained LoRA."
+            elif not has_lora and (W.FAMILIES[fam]["engine"] != "sd" or fam == "sd15"):
+                note = "Its pictures work with SDXL, Pony and Illustrious models. For this model, train a LoRA."
+            elif has_lora and c.get("trigger"):
+                note = f"Uses its LoRA; \"{c['trigger']}\" is added to the prompt by itself."
+        self.char_note.setText(note)
+        self.char_note.setVisible(bool(note))
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._fill_characters()
+
     def _enhance(self, on):
         cfg.set("image_enhance", bool(on))
         self._set("hires", "on" if on else "off")
@@ -300,6 +379,7 @@ class ImagePage(QWidget):
         if p.get("init_image"):
             self.init_box.set_open(True)
         self.denoise.set(float(p.get("denoise", 0.6)))
+        self.char_strength.set(float(p.get("char_strength", 0.8)))
         self._denoise_text(float(p.get("denoise", 0.6)))
         self.bar.set_private(p.get("private", False))
         self._loading = False

@@ -60,6 +60,8 @@ DEFAULTS = {
     "market_favs": [],
     "civitai_key": None,              # the optional API key, encrypted for this Windows account (DPAPI)
     "stores": [],                     # drives for pictures and vault files: [{id, path, serial, label, kind}]
+    "train_speed": {},                # seconds a training step took, by picture size
+    "addon_files": [],                # files the Character reference add-on brought (they go with it)
     "gif_fps": None,                  # GIFs play at (None: the speed new videos are made at)
     "comfy_tidy": True,               # after each job: its uploads, temporary copies and history entry in ComfyUI go
     "forget_prompts": True,           # deleting a picture also takes its prompt out of the prompt history

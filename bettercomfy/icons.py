@@ -61,6 +61,8 @@ _P = {
     "crop": '<path d="M6.5 3v14.5H21M3 6.5h14.5V21"/>',
     "rotate": '<path d="M4.5 12a7.5 7.5 0 1 0 2.3-5.4"/><path d="M4 3.5V8h4.5"/>',
     "rotate_r": '<path d="M19.5 12a7.5 7.5 0 1 1-2.3-5.4"/><path d="M20 3.5V8h-4.5"/>',
+    "person": '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+    "dumbbell": '<path d="M6.5 7v10M17.5 7v10M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/>',
     "flip": '<path d="M12 3v18M9 6.5L4 18h5zM15 6.5L20 18h-5z"/>',
     "camera": '<path d="M4 8.5A2 2 0 0 1 6 6.5h2L9.5 4.5h5L16 6.5h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>'
               '<circle cx="12" cy="13" r="3.5"/>',

@@ -20,7 +20,9 @@ from .image_page import ImagePage
 from .jobs import Queue, sweep_leftovers
 from .link import Link
 from .loras_page import LorasPage
+from .characters_page import CharactersPage
 from .models_page import CheckpointsPage
+from .train_page import TrainPage
 from .queue_page import QueuePage
 from .settings_page import SettingsPage
 from .vault import vault
@@ -28,7 +30,8 @@ from .video_page import VideoPage
 from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, label
 
 PAGES = [("image", "Image", "image"), ("video", "Video", "video"), ("queue", "Queue", "queue"),
-         ("gallery", "Gallery", "gallery"), ("loras", "LoRAs", "lora"), ("models", "Checkpoints", "chip")]
+         ("gallery", "Gallery", "gallery"), ("loras", "LoRAs", "lora"), ("models", "Checkpoints", "chip"),
+         ("characters", "Characters", "person"), ("train", "Train", "dumbbell")]
 BOTTOM = [("settings", "Settings", "settings")]
 
 
@@ -179,7 +182,8 @@ class Window(QMainWindow):
         h.addWidget(main, 1)
         self.pages = {}
         for key, cls in (("image", ImagePage), ("video", VideoPage), ("queue", QueuePage), ("gallery", GalleryPage),
-                         ("loras", LorasPage), ("models", CheckpointsPage), ("settings", SettingsPage)):
+                         ("loras", LorasPage), ("models", CheckpointsPage), ("characters", CharactersPage),
+                         ("train", TrainPage), ("settings", SettingsPage)):
             pg = cls(self)
             self.pages[key] = pg
             self.stack.addWidget(pg)
