@@ -288,7 +288,7 @@ class ImagePage(QWidget):
         for i in range(self.char_list.count()):
             if self.char_list.item(i).data(Qt.ItemDataRole.UserRole) == cur:
                 self.char_list.setCurrentRow(i)
-        self.char_card.setVisible(bool(chars))
+        self.char_list.setVisible(bool(chars))
         self._char_ui()
 
     def _char_clicked(self, it):
@@ -307,7 +307,7 @@ class ImagePage(QWidget):
         from . import charlib
         c = charlib.get(self.p.get("character") or "")
         self.char_row.setVisible(bool(c))
-        note = ""
+        note = "" if charlib.all_characters() else "No characters yet. Make one in the Characters tab, then pick it here."
         if c:
             fam = W.family_of(self.p, self._kind())
             has_lora = bool(c.get("lora"))
