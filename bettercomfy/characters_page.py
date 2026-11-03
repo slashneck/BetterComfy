@@ -124,11 +124,7 @@ class CharactersPage(QWidget):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(24, 16, 16, 12)
         lv.setSpacing(12)
-        self.addon_lbl = label("", "Muted")
-        self.addon_btn = button("Install…", self._addon, "Ghost", "download")
-        self.addon_rm = button("Take it out…", self._addon_remove, "Ghost", "trash", icon_color="#FF8A8A")
-        lv.addWidget(hrow(button("New character", self._new, "Accent", "plus"), None, self.addon_lbl, self.addon_btn,
-                          self.addon_rm, spacing=10))
+        lv.addWidget(hrow(button("New character", self._new, "Accent", "plus"), None))
         self.grid = QListWidget()
         self.grid.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -142,10 +138,33 @@ class CharactersPage(QWidget):
                                 "QListWidget::item:selected { background: #222226; }")
         self.grid.currentItemChanged.connect(lambda cur, _p: cur and self.open_char(cur.data(Qt.ItemDataRole.UserRole)))
         lv.addWidget(self.grid, 1)
-        self.empty = label("No characters yet. Press New character and give it a few pictures: different poses and "
-                           "angles work best.", "Muted", wrap=True)
-        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lv.addWidget(self.empty)
+        self.empty = QWidget()
+        ev = QVBoxLayout(self.empty)
+        ev.setSpacing(8)
+        ev.addStretch(1)
+        art = label()
+        art.setPixmap(icons.pixmap("person", 56, "#3A3A40"))
+        art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title = label("No characters yet", "H2")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        text = label("Press New character and give it a few pictures: different poses and angles work best.", "Muted")
+        text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ev.addWidget(art)
+        ev.addWidget(title)
+        ev.addWidget(text)
+        ev.addStretch(1)
+        lv.addWidget(self.empty, 1)
+
+        # the optional add-on, with what it is and that it's on your own behalf
+        self.addon_lbl = label("", None)
+        self.addon_btn = button("Install…", self._addon, "Ghost", "download")
+        self.addon_rm = button("Take it out…", self._addon_remove, "Ghost", "trash", icon_color="#FF8A8A")
+        addon = Card()
+        addon.add(hrow(self.addon_lbl, None, self.addon_btn, self.addon_rm, spacing=6),
+                  label("Lets a character's pictures guide a new picture, without training a LoRA. ComfyUI doesn't check "
+                        "add-ons: this one is widely used and open source, but you install it on your own behalf.", "Faint",
+                        wrap=True))
+        lv.addWidget(addon)
         h.addWidget(left, 1)
 
         side = QWidget()
@@ -167,7 +186,6 @@ class CharactersPage(QWidget):
         self.refs.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.refs.setIconSize(QSize(80, 80))
         self.refs.setGridSize(QSize(90, 90))
-        self.refs.setFixedHeight(190)
         self.refs.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.refs.customContextMenuRequested.connect(self._ref_menu)
         self.drop = ImageDrop("Drop pictures here, or click to choose", 84)
@@ -245,6 +263,9 @@ class CharactersPage(QWidget):
             it = QListWidgetItem(tile(r, 160), "")
             it.setData(Qt.ItemDataRole.UserRole, r)
             self.refs.addItem(it)
+        rows = min(3, (self.refs.count() + 2) // 3)
+        self.refs.setFixedHeight(rows * 92 + 4)
+        self.refs.setVisible(rows > 0)
         self._fill_loras()
 
     def _fill_loras(self):
@@ -336,7 +357,9 @@ class CharactersPage(QWidget):
         anything = any(charlib.addon_state(ins).values()) and (charlib.addon_state(ins)["node"] or
                                                                charlib.addon_state(ins)["model"])
         self.addon_lbl.setText("Character reference: installed" if on else "Character reference: optional add-on")
-        self.addon_btn.setVisible(not on and bool(ins))
+        self.addon_btn.setToolTip("" if ins else "ComfyUI wasn't found")
+        self.addon_btn.setEnabled(bool(ins))
+        self.addon_btn.setVisible(not on)
         self.addon_rm.setVisible(anything)
 
     def _addon(self):
