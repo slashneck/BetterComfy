@@ -481,15 +481,15 @@ class GalleryPage(QWidget):
         self.prompt.setMaximumHeight(110)
         sv.addWidget(self.prompt)
         self.b = {}
-        acts = [("reuse", "Reuse", "refresh"), ("animate", "Animate", "video"), ("extend", "Extend", "arrow"),
+        acts = [("reuse", "Reuse", "refresh"), ("start", "Use as start", "image"), ("animate", "Animate", "video"), ("extend", "Extend", "arrow"),
                 ("upscale", "Upscale", "scale"), ("inpaint", "Edit", "edit"), ("compare", "Comparison", "gallery"),
-                ("trimcrop", "Trim & crop", "crop"), ("copyprompt", "Copy prompt", "copy"),
+                ("trimcrop", "Trim and crop", "crop"), ("copyprompt", "Copy prompt", "copy"),
                 ("folder", "Show in folder", "folder"),
                 ("move_vault", "To vault", "lock"), ("take_out", "Take out", "unlock"), ("delete", "Delete", "trash")]
         for k, t, ic in acts:
             self.b[k] = button(t, lambda k=k: self._act(k), "Ghost" if k != "reuse" else None, ic)
         acts_box = ChipBox(4)           # wraps: never cut off, whatever is shown for the picked item
-        for k in ("reuse", "animate", "extend", "upscale", "inpaint", "trimcrop", "compare", "copyprompt", "folder",
+        for k in ("reuse", "start", "animate", "extend", "upscale", "inpaint", "trimcrop", "compare", "copyprompt", "folder",
                   "move_vault", "take_out", "delete"):
             acts_box.add(self.b[k])
         sv.addWidget(acts_box)
@@ -1504,6 +1504,8 @@ class GalleryPage(QWidget):
         img = not on or self.cur["kind"] == "image"
         inv = on and bool(self.cur.get("vault"))
         self.b["animate"].setVisible(img)
+        self.b["start"].setVisible(img)
+        self.b["start"].setToolTip("A new picture from this one: the Image page with it as the start picture")
         self.b["upscale"].setVisible(img)
         self.b["inpaint"].setVisible(img)
         self.b["extend"].setVisible(not img)

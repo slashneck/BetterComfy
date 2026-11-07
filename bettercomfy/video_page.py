@@ -23,6 +23,8 @@ class VideoPage(QWidget):
         self.link, self.queue, self.history = app.link, app.queue, app.history
         self.p = copy.deepcopy(W.VIDEO_DEFAULT)
         self.p.update(cfg.get("video_state") or {})
+        if cfg.get("clean_start", True):
+            W.clean_slate(self.p, W.VIDEO_DEFAULT)
         self._loading = False
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)

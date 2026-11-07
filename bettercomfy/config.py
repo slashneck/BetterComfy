@@ -60,6 +60,7 @@ DEFAULTS = {
     "market_favs": [],
     "civitai_key": None,              # the optional API key, encrypted for this Windows account (DPAPI)
     "stores": [],                     # drives for pictures and vault files: [{id, path, serial, label, kind}]
+    "clean_start": True,              # each start with an empty prompt and result strip (the gallery keeps all)
     "train_speed": {},                # seconds a training step took, by picture size
     "addon_files": [],                # files the Character reference add-on brought (they go with it)
     "gif_fps": None,                  # GIFs play at (None: the speed new videos are made at)

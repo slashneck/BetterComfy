@@ -153,7 +153,10 @@ class SettingsPage(QWidget):
         c = Card("Output")
         self.img_dir = self._dir_row(c, "Pictures", "image_dir")
         self.vid_dir = self._dir_row(c, "Videos", "video_dir")
-        c.add(ToggleRow("A folder per day", "e.g. …/2026-10-08/", cfg.get("date_folders"),
+        c.add(ToggleRow("Start clean", "Each time Better Comfy opens: empty prompts, no start pictures, and only "
+                                       "new results next to Generate. The gallery keeps everything.",
+                        cfg.get("clean_start", True), lambda v: cfg.set("clean_start", v)),
+              ToggleRow("A folder per day", "e.g. …/2026-10-08/", cfg.get("date_folders"),
                         lambda v: cfg.set("date_folders", v)),
               ToggleRow("Settings inside the PNG", "Prompt, seed, model - and the workflow, so dropping the picture "
                                                   "on ComfyUI opens it", cfg.get("embed_metadata"),

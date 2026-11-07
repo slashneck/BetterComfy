@@ -251,6 +251,16 @@ def size_from_aspect(aspect_key, base=1024, mp=1.0, mult=64):
     return best or (snap(area ** 0.5, mult), snap(area ** 0.5, mult))
 
 
+# what a clean start leaves out: the words and pictures of last time (models and settings stay)
+CLEAN_KEYS = ("prompt", "negative", "init_image", "mask_image", "source_image", "start_image", "end_image", "character")
+
+
+def clean_slate(p, default):
+    for k in CLEAN_KEYS:
+        if k in p:
+            p[k] = default.get(k, "")
+
+
 def family_of(p, kind=None):
     f = p.get("family") or "auto"
     return f if f in FAMILIES else guess_family(p.get("ckpt"), kind)

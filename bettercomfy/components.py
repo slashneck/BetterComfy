@@ -2,6 +2,7 @@
 the seed control, the Generate bar and the result pane (player + filmstrip + actions)."""
 import re
 import threading
+import time
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QImage, QPixmap, QTextCursor
@@ -10,6 +11,8 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QListWidget, QLi
 
 from . import comfy, icons, loras, media, theme as T, workflows
 from .config import cfg
+
+SESSION_START = time.strftime("%Y-%m-%d %H:%M:%S")     # results from before it are not shown at a clean start
 from .widgets import (BLUR_ROLE, BlurTextDelegate, Combo, Card, ChipBox, Collapsible, Filmstrip, Player, Segmented, Slider,
                       Toggle, ToggleRow, blur_pixmap, blur_widget, button, chip, field, hrow, icon_button, label, nice_name,
                       quiet, vcol)
@@ -1066,8 +1069,14 @@ class ResultPane(QWidget):
                 self.dropped.emit(f)
                 return
 
+    def _recent(self, n):
+        items = self.history.recent(self.kind, n)
+        if cfg.get("clean_start", True):        # a clean start: only what was made since the app opened
+            items = [e for e in items if e.get("created", "") >= SESSION_START]
+        return items
+
     def reload(self):
-        items = self.history.recent(self.kind, 120)
+        items = self._recent(120)
         self.strip.fill(items, self.cur["id"] if self.cur else None)
         if self.cur is None and items:
             self.show_entry(items[0]["id"], fade=False)
@@ -1082,7 +1091,7 @@ class ResultPane(QWidget):
         self.strip.remove_id(eid)
         if self.cur and self.cur["id"] == eid:
             self.cur = None
-            items = self.history.recent(self.kind, 1)
+            items = self._recent(1)
             if items:
                 self.show_entry(items[0]["id"])
             else:

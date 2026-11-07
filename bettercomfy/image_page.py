@@ -26,6 +26,8 @@ class ImagePage(QWidget):
         self.link, self.queue, self.history = app.link, app.queue, app.history
         self.p = copy.deepcopy(W.IMAGE_DEFAULT)
         self.p.update(cfg.get("image_state") or {})
+        if cfg.get("clean_start", True):
+            W.clean_slate(self.p, W.IMAGE_DEFAULT)
         self._loading = False
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
@@ -40,6 +42,7 @@ class ImagePage(QWidget):
         sv.setContentsMargins(0, 0, 0, 0)
         sv.setSpacing(0)
         sc = Scroll((16, 16, 14, 16), 12)
+        self.sc = sc
         self.scroll = sc
         sv.addWidget(sc, 1)
         self.bar = GenerateBar("image", [("Compare settings…", "gallery", self.compare),
@@ -729,3 +732,4 @@ class ImagePage(QWidget):
     def set_start(self, path):
         self.init.set_path(path)
         self.init_box.set_open(True)
+        QTimer.singleShot(350, lambda: self.sc.ensureWidgetVisible(self.init_box, 0, 40))

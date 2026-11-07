@@ -1641,11 +1641,57 @@ class NavButton(QAbstractButton):
         p.end()
 
 
+class NavHeader(QAbstractButton):
+    """A small group title in the rail; click it to fold the group."""
+
+    def __init__(self, text):
+        super().__init__()
+        self.text_ = text
+        self.open_ = True
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(72, 22)
+        self._hover = False
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        col = QColor("#8A8A93" if self._hover else "#55555D")
+        f = QFont(self.font())
+        f.setPixelSize(9)
+        f.setWeight(QFont.Weight.Bold)
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
+        p.setFont(f)
+        p.setPen(col)
+        text = self.text_.upper()
+        w = p.fontMetrics().horizontalAdvance(text)
+        x = (self.width() - w - 9) / 2
+        p.drawText(QRectF(x, 0, w + 2, self.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        # a small chevron: down when open, right when folded
+        cx, cy = x + w + 6, self.height() / 2
+        pen = QPen(col, 1.3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        if self.open_:
+            p.drawPolyline([QPointF(cx - 2.5, cy - 1.2), QPointF(cx, cy + 1.3), QPointF(cx + 2.5, cy - 1.2)])
+        else:
+            p.drawPolyline([QPointF(cx - 1.2, cy - 2.5), QPointF(cx + 1.3, cy), QPointF(cx - 1.2, cy + 2.5)])
+        p.end()
+
+
 class NavRail(QWidget):
-    """The left rail: logo, pages, an indicator that glides to the active one."""
+    """The left rail: logo, pages in groups (each under a small header that folds it), an indicator that glides to
+    the active one."""
     changed = Signal(str)
 
-    def __init__(self, items, bottom):
+    def __init__(self, groups, bottom):
         super().__init__()
         self.setObjectName("PanelR")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1664,11 +1710,24 @@ class NavRail(QWidget):
         v.addWidget(logo)
         v.addSpacing(14)
         self.btns = {}
-        for key, text, ic in items:
-            b = NavButton(key, text, ic)
-            b.clicked.connect(lambda _=False, k=key: self.select(k, emit=True))
-            v.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
-            self.btns[key] = b
+        self.groups = {}                # header text -> (header, [keys])
+        folded = set(cfg.get("nav_folded") or [])
+        for gi, (title, items) in enumerate(groups):
+            if gi:
+                v.addSpacing(4)
+            hd = NavHeader(title)
+            hd.clicked.connect(lambda _=False, t=title: self.fold(t))
+            v.addWidget(hd, 0, Qt.AlignmentFlag.AlignHCenter)
+            keys = []
+            for key, text, ic in items:
+                b = NavButton(key, text, ic)
+                b.clicked.connect(lambda _=False, k=key: self.select(k, emit=True))
+                v.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
+                self.btns[key] = b
+                keys.append(key)
+            self.groups[title] = (hd, keys)
+            if title in folded:
+                self.fold(title, save=False)
         v.addStretch(1)
         for key, text, ic in bottom:
             b = NavButton(key, text, ic)
@@ -1682,9 +1741,29 @@ class NavRail(QWidget):
         self._a.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._a.valueChanged.connect(lambda v: (setattr(self, "_y", float(v)), self.update()))
 
+    def fold(self, title, save=True):
+        hd, keys = self.groups[title]
+        hd.open_ = not hd.open_
+        hd.update()
+        for k in keys:
+            # the page you are on stays reachable
+            self.btns[k].setVisible(hd.open_ or k == self.cur)
+        if save:
+            cfg.set("nav_folded", [t for t, (h, _k) in self.groups.items() if not h.open_])
+        QTimer.singleShot(0, self._settle)
+
+    def _settle(self):
+        if self.cur and self.btns[self.cur].isVisible():
+            self._y = float(self.btns[self.cur].geometry().center().y())
+            self.update()
+
     def select(self, key, emit=False):
         if key not in self.btns:
             return
+        for hd, keys in self.groups.values():
+            if not hd.open_:            # leaving a folded group's page hides it again; going to one shows it
+                for k in keys:
+                    self.btns[k].setVisible(k == key)
         for k, b in self.btns.items():
             b.setChecked(k == key)
         target = self.btns[key].geometry().center().y()

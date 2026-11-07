@@ -29,9 +29,11 @@ from .vault import vault
 from .video_page import VideoPage
 from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, label
 
-PAGES = [("image", "Image", "image"), ("video", "Video", "video"), ("queue", "Queue", "queue"),
-         ("gallery", "Gallery", "gallery"), ("loras", "LoRAs", "lora"), ("models", "Checkpoints", "chip"),
-         ("characters", "Characters", "person"), ("train", "Train", "dumbbell")]
+GROUPS = [("Create", [("image", "Image", "image"), ("video", "Video", "video")]),
+          ("Library", [("queue", "Queue", "queue"), ("gallery", "Gallery", "gallery")]),
+          ("Models", [("loras", "LoRAs", "lora"), ("models", "Checkpoints", "chip")]),
+          ("Custom", [("characters", "Characters", "person"), ("train", "Train", "dumbbell")])]
+PAGES = [it for _g, items in GROUPS for it in items]
 BOTTOM = [("settings", "Settings", "settings")]
 
 
@@ -163,7 +165,7 @@ class Window(QMainWindow):
         h = QHBoxLayout(root)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
-        self.rail = NavRail(PAGES, BOTTOM)
+        self.rail = NavRail(GROUPS, BOTTOM)
         self.rail.changed.connect(self.go)
         h.addWidget(self.rail)
         main = QWidget()
@@ -677,6 +679,13 @@ class Window(QMainWindow):
         elif key == "animate":
             self.pages["video"].set_start(ref)
             self.go("video")
+        elif key == "start" and e["kind"] == "image":
+            pg = self.pages["image"]
+            pg.bar.set_private(True)            # made from a vault picture: private too
+            pg._set("private", True)
+            pg.set_start(ref)
+            self.go("image")
+            self.toast("The start picture is set - the result goes into the vault.", "ok")
         elif key == "reuse":
             pg = self.pages["image" if e["kind"] == "image" else "video"]
             pg.use_settings(dict(e.get("params") or {}, private=True))
@@ -754,6 +763,12 @@ class Window(QMainWindow):
         if key == "compare":
             if e.get("group"):
                 self.open_compare(e["group"])
+            return
+        if key == "start":
+            if e.get("kind") == "image":
+                self.pages["image"].set_start(e["file"])
+                self.go("image")
+                self.toast("Set as the start picture. Write what it should become and press Generate.", "ok")
             return
         if key == "animate":
             self.pages["video"].set_start(e["file"])
