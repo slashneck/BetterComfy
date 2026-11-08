@@ -1710,6 +1710,7 @@ class NavRail(QWidget):
         v.addWidget(logo)
         v.addSpacing(14)
         self.btns = {}
+        self.cur = None
         self.groups = {}                # header text -> (header, [keys])
         folded = set(cfg.get("nav_folded") or [])
         for gi, (title, items) in enumerate(groups):
