@@ -4,7 +4,7 @@ import os
 
 from PySide6.QtCore import (QEasingCurve, QEvent, QMimeData, QPoint, QUrl, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
                             QVariantAnimation, Signal, Property)
-from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetrics, QIcon, QImage, QLinearGradient,
+from PySide6.QtGui import (QRegion, QBrush, QColor, QFont, QFontMetrics, QIcon, QImage, QLinearGradient,
                            QPainter, QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractButton, QStyledItemDelegate, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
                                QHBoxLayout, QLabel, QLayout, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
@@ -1544,15 +1544,13 @@ class _Swap(QWidget):
         super().__init__(parent)
         self.old, self.new, self.t = old, new, 0.0
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
 
     def set_t(self, t):
         self.t = float(t)
         self.update()
 
     def paintEvent(self, _):
-        p = QPainter(self)
-        p.fillRect(self.rect(), T.col(T.BG))
+        p = QPainter(self)                         # no background of its own: what is behind the pages stays
         t = self.t
         out = min(1.0, t * 1.6)                    # the old page is gone a bit before the new one settles
         if out < 1.0:
@@ -1571,6 +1569,16 @@ class FadeStack(QStackedWidget):
         self._ov = None
         self._anim = None
 
+    @staticmethod
+    def _snap(w):
+        """A page as a picture, see-through where the page is (grab() would fill those places with the window colour)."""
+        ratio = w.devicePixelRatioF()
+        pm = QPixmap(w.size() * ratio)
+        pm.setDevicePixelRatio(ratio)
+        pm.fill(Qt.GlobalColor.transparent)
+        w.render(pm, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return pm
+
     def switch(self, i):
         if i == self.currentIndex():
             return
@@ -1581,11 +1589,11 @@ class FadeStack(QStackedWidget):
             self._anim.stop()
             self._ov.deleteLater()
             self._ov = None
-        old = self.currentWidget().grab()
+        old = self._snap(self.currentWidget())
         self.setCurrentIndex(i)
         new_w = self.currentWidget()
         new_w.resize(self.size())
-        new = new_w.grab()
+        new = self._snap(new_w)
         ov = _Swap(self, old, new)
         ov.setGeometry(self.rect())
         ov.show()
