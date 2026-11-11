@@ -4,12 +4,12 @@ import threading
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
-from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QMenu, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
+from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
     QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from . import comfy, icons, system, theme as T
 from .config import APP_NAME, BASE, VERSION, cfg, resource
-from .backdrop import KINDS, art_path, art_pictures
+from .backdrop import KINDS, art_pictures
 from .hotkey import KeyCatcher
 from .queue_page import AFTER
 from .quick import ConnectionLog, Shortcuts
@@ -421,11 +421,11 @@ class SettingsPage(QWidget):
         self.backdrop = Combo()
         for k, t in KINDS:
             self.backdrop.addItem(t, k)
+        for name, _path in art_pictures():
+            self.backdrop.addItem(f"Dot art: {name}", f"art:{name}")
         set_combo(self.backdrop, cfg.get("backdrop") or "none")
-        self.backdrop.currentIndexChanged.connect(lambda _i: self._backdrop())
-        self.art_btn = button("Picture…", self._backdrop_art, "Ghost", "image", "The picture that is turned into dots")
-        self.art_btn.setVisible(self.backdrop.currentData() == "art")
-        c.add(field("Background", hrow(self.backdrop, self.art_btn, spacing=6), "A faint moving background behind the pages. It stops when another "
+        self.backdrop.currentIndexChanged.connect(lambda _i: self.app.set_backdrop(self.backdrop.currentData()))
+        c.add(field("Background", self.backdrop, "A faint moving background behind the pages. It stops when another "
                                                  "program is in front. Needs Animations on.", label_w=90))
         self.ui_scale = Slider(80, 150, 5, 0, float(cfg.get("ui_scale") or 100), self._ui_scale, suffix=" %", width=80)
         scale_chips = ChipBox(4)
@@ -1203,39 +1203,6 @@ class SettingsPage(QWidget):
     def _whats_new(self):
         from .whatsnew import WhatsNew
         WhatsNew(self).exec()
-
-    def _backdrop(self):
-        kind = self.backdrop.currentData()
-        self.art_btn.setVisible(kind == "art")
-        if kind == "art" and not art_path():
-            self._backdrop_file()
-        self.app.set_backdrop(kind)
-
-    def _backdrop_art(self):
-        """The pictures kept for Dot art, or any other."""
-        kept = art_pictures()
-        if not kept:
-            self._backdrop_file()
-            return
-        m = QMenu(self)
-        for name, path in kept:
-            a = m.addAction(name)
-            a.setCheckable(True)
-            a.setChecked(path == art_path())
-            a.triggered.connect(lambda _=False, p=path: self._backdrop_use(p))
-        m.addSeparator()
-        m.addAction("Another picture…").triggered.connect(self._backdrop_file)
-        m.exec(self.art_btn.mapToGlobal(self.art_btn.rect().bottomLeft()))
-
-    def _backdrop_use(self, path):
-        cfg.set("backdrop_art", path)
-        self.app.backdrop.rebuild()
-
-    def _backdrop_file(self):
-        path, _f = QFileDialog.getOpenFileName(self, "A picture for the dots", "", "Pictures (*.png *.jpg *.jpeg *.webp)")
-        if path:
-            cfg.set("backdrop_art", path)
-            self.app.backdrop.rebuild()
 
     def _ui_scale(self, v):
         cfg.set("ui_scale", int(v))

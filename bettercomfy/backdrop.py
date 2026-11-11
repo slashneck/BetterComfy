@@ -1,5 +1,6 @@
 """The moving backgrounds (Settings, Look & feel): behind everything, only drawn while the app is in front. Under another
-program, or a game, they stop completely. No pictures come with them: Dot art is made from one you pick."""
+program, or a game, they stop completely. No pictures come with them: each picture kept in the backdrop_art folder of
+the data folder is offered as a Dot art background of its own."""
 import math
 import os
 import random
@@ -10,15 +11,16 @@ from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixma
 from PySide6.QtWidgets import QApplication, QWidget
 
 from . import theme as T
-from .config import BASE, cfg
+from .config import BASE
 
-KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code", "Binary city"), ("art", "Dot art"))
+KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code", "Binary city"))
 ART_DIR = os.path.join(BASE, "backdrop_art")     # your own pictures for Dot art (they stay on this PC)
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
 DENSITY = 0.62                          # dots per pixel where a picture is at its brightest
 _LINE = 0.075                           # up to this brightness a thin stroke counts as an outline
 _COLOURED = 0.34                        # from this saturation on, a place in the picture counts as having colour
+_CITY_TOP = 230                         # pixels from the top of the window that the city leaves free
 _ART_REACH = 96                         # the dot art has many more dots to move
 _SPEED = {"dots": 33, "cloud": 70, "code": 110, "art": 40}
 
@@ -31,14 +33,6 @@ def art_pictures():
     except OSError:
         return []
     return [(os.path.splitext(n)[0], os.path.join(ART_DIR, n)) for n in names]
-
-
-def art_path():
-    """The picture to use: the one you chose, else the first one kept."""
-    p = cfg.get("backdrop_art") or ""
-    if os.path.isfile(p):
-        return p
-    return next((path for _n, path in art_pictures()), "")
 
 
 def _window_sum(mask, size):
@@ -114,6 +108,7 @@ class Backdrop(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.kind = "none"
+        self.art_file = ""
         self.mouse = QPointF(-999, -999)
         self.points = []
         self.base = None                # what doesn't change: drawn once, then only copied
@@ -128,6 +123,12 @@ class Backdrop(QWidget):
         QApplication.instance().applicationStateChanged.connect(lambda _s: self._run())
 
     def set_kind(self, kind):
+        """kind: one of KINDS, or "art:<name>" for a kept picture."""
+        self.art_file = ""
+        if kind.startswith("art"):
+            kept = dict(art_pictures())
+            self.art_file = kept.get(kind[4:]) or next(iter(kept.values()), "")
+            kind = "art" if self.art_file else "none"
         self.kind = kind
         self.points = []
         self.rebuild()
@@ -268,18 +269,20 @@ class Backdrop(QWidget):
         cw, ch = 13, 18
         cols = w // cw + 1
         rows = h // ch + 1
+        sky = _CITY_TOP // ch                   # nothing above this row: the top bar and page titles stay clear
         q = QPainter(self.base)
         c = -2
         while c < cols:
             bw = rng.randint(12, 22)
             mid = c + bw / 2
-            roof = rng.uniform(0.04, 0.42) * rows
+            roof = rng.uniform(0.30, 0.56) * rows
             spire = rng.random() < 0.6
             for col in range(max(0, c), min(cols, c + bw)):
                 off = abs(col - mid)
                 top = roof + off * 0.55             # the roof falls away on both sides of the corner
                 if spire and off < 2.4:
                     top -= rows * 0.09
+                top = max(top, sky)
                 # towers stand on a line that dips at each corner
                 bottom = rows * 0.97 - off * 0.8
                 span = max(1.0, bottom - top)
@@ -289,10 +292,10 @@ class Backdrop(QWidget):
                         continue
                     alpha = int(round(max(2.0, 8.0 - 5.0 * d)))
                     digit = rng.choice("01")
-                    x, y = col * cw, row * ch + int(off * 2)
+                    x, y = col * cw, row * ch
                     q.drawPixmap(x, y, self._glyph(digit, alpha))
                     self.city.append((x, y, alpha))
-            c += bw + rng.randint(-2, 1)
+            c += bw + rng.randint(0, 2)             # towers side by side, never through each other
         q.end()
 
     def _city_tick(self):
@@ -370,7 +373,7 @@ class Backdrop(QWidget):
         self.base.fill(Qt.GlobalColor.transparent)
         self.dot_col = QColor(T.col(T.TEXT if T.MODE == "dark" else T.TEXT2))
         self.cells = {}
-        img = QImage(art_path())
+        img = QImage(self.art_file)
         if img.isNull():
             return
         detail = min(1.0, img.height() / 800) ** 0.55
