@@ -167,6 +167,7 @@ class Backdrop(QWidget):
         self.art_gen = 0                # which build of the picture is wanted; older ones arriving late are dropped
         self.art_busy = -1
         self.art_ready = -1
+        self.art_places = None
         self._art_done.connect(self._use_art)
         self.art_origin = QPoint(0, 0)
         self.art_t = 0.0
@@ -176,6 +177,7 @@ class Backdrop(QWidget):
         self.stars = []
         self._art_box = self._art_mask = self._near = None
         self.timer = QTimer(self, timeout=self._tick)
+        self.hover = QTimer(self, interval=16, timeout=self._hover_tick)
         self.resized = QTimer(self, singleShot=True, interval=220, timeout=self.rebuild)    # once, when the resizing stops
         QApplication.instance().applicationStateChanged.connect(lambda _s: self._run())
 
@@ -211,11 +213,18 @@ class Backdrop(QWidget):
         from .widgets import anims_on
         on = self.kind != "none" and anims_on() and QApplication.applicationState() == Qt.ApplicationState.ApplicationActive
         self.timer.stop()
+        self.hover.stop()
         if on:
             self.timer.start(_SPEED.get(self.kind, 80))
+            if self.kind == "art":
+                self.hover.start()
 
     def _tick(self):
         if not self.window().isVisible():
+            return
+        if self.kind == "art":                  # (the cursor has a faster timer of its own here)
+            self._stars_tick()
+            self._art_tick()
             return
         m = QPointF(self.mapFromGlobal(QCursor.pos()))
         moved = (m - self.mouse).manhattanLength() > 1
@@ -231,9 +240,23 @@ class Backdrop(QWidget):
             self.update()
         elif self.kind == "code":
             self._city_tick()
-        if self.kind == "art":
-            self._stars_tick()
-            self._art_tick()
+
+    def _hover_tick(self):
+        """The glow follows the cursor at screen speed, with a little easing; only the spot around it is redrawn."""
+        if not self.window().isVisible() or self.base is None:
+            return
+        aim = QPointF(self.mapFromGlobal(QCursor.pos()))
+        old = self.mouse
+        step = aim - old
+        if step.manhattanLength() < 0.4:
+            return
+        self.mouse = old + step * 0.45 if step.manhattanLength() < 900 else aim
+        art = QRect(self.art_origin, self.base.size())
+        r = _ART_REACH + 2
+        for c in (old, self.mouse):
+            spot = QRect(int(c.x()) - r, int(c.y()) - r, 2 * r, 2 * r)
+            if spot.intersects(art):
+                self.update(spot)
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -495,6 +518,7 @@ class Backdrop(QWidget):
         if gen != self.art_gen:
             return
         self.art_ready = gen
+        self.art_places = None
         self.base = QPixmap(1, 1)
         self.base.fill(Qt.GlobalColor.transparent)
         self.art_layers = []
@@ -514,26 +538,34 @@ class Backdrop(QWidget):
     def _art_frame(self):
         """This moment of the picture: every layer a little off its place, a little brighter or dimmer."""
         if not self.art_layers or self.base is None:
-            return
-        self.base.fill(Qt.GlobalColor.transparent)
+            return False
         t = self.art_t
+        places = []
+        for n in range(len(self.art_layers)):
+            phase = n * 2.399                   # spread evenly, so they never move together
+            reach = _DRIFT_LOOSE if n >= _LAYERS else _DRIFT
+            places.append((round(reach * 0.5 * (math.sin(t * 0.8 + phase) + math.sin(t * 0.37 + phase * 2.3))),
+                           round(reach * 0.5 * (math.cos(t * 0.65 + phase * 1.3) + math.sin(t * 0.29 + phase * 0.7))),
+                           round((0.86 + 0.14 * math.sin(t * 1.15 + phase * 1.7)) * 24) / 24))
+        if places == self.art_places:           # nothing visibly changed: nothing to draw
+            return False
+        self.art_places = places
+        self.base.fill(Qt.GlobalColor.transparent)
         q = QPainter(self.base)
         if T.MODE == "dark":
             q.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-        for n, pm in enumerate(self.art_layers):
-            phase = n * 2.399                   # spread evenly, so they never move together
-            reach = _DRIFT_LOOSE if n >= _LAYERS else _DRIFT
-            q.setOpacity(0.86 + 0.14 * math.sin(t * 1.15 + phase * 1.7))
-            q.drawPixmap(round(reach * 0.5 * (math.sin(t * 0.8 + phase) + math.sin(t * 0.37 + phase * 2.3))),
-                         round(reach * 0.5 * (math.cos(t * 0.65 + phase * 1.3) + math.sin(t * 0.29 + phase * 0.7))), pm)
+        for (dx, dy, opacity), pm in zip(places, self.art_layers):
+            q.setOpacity(opacity)
+            q.drawPixmap(dx, dy, pm)
         q.end()
+        return True
 
     def _art_tick(self):
         if self.base is None or not self.art_layers:
             return
         self.art_t += _SPEED["art"] / 1000
-        self._art_frame()
-        self.update(QRect(self.art_origin, self.base.size()))
+        if self._art_frame():
+            self.update(QRect(self.art_origin, self.base.size()))
 
     def _paint_art(self, p):
         if self.art_ready != self.art_gen:
