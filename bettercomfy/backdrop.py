@@ -132,7 +132,8 @@ def compute_art(path, w, h, light):
         return None
     detail = min(1.0, img.height() / 800) ** 0.55
     img = img.scaledToHeight(900, Qt.TransformationMode.SmoothTransformation)
-    size = max(1, int(h * 0.97))
+    # as big as fits: standing on the bottom edge of the window, and never wider than it
+    size = max(1, int(min(h * 0.97, w * 0.96 * img.height() / img.width())))
     xs, ys, colours, energies, loose = particles(img, size, light, detail)
     art_w = size * img.width() / img.height()
     ox, oy = max(0, min(w - art_w, w * 0.64 - art_w / 2)), h - size
