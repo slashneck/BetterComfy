@@ -1,15 +1,16 @@
 """Parts shared by the Image and Video pages: the prompt editor, the LoRA stack (with trigger words), the LoRA picker,
 the seed control, the Generate bar and the result pane (player + filmstrip + actions)."""
+import os
 import re
 import threading
 import time
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QImage, QPixmap, QTextCursor
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMenu,
                                QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget)
 
-from . import comfy, icons, loras, media, theme as T, workflows
+from . import ckpts, comfy, icons, loras, media, theme as T, workflows
 from .config import cfg
 
 SESSION_START = time.strftime("%Y-%m-%d %H:%M:%S")     # results from before it are not shown at a clean start
@@ -228,6 +229,99 @@ def history_menu(parent, on_pick):
     return m
 
 
+class ModelPicker(Combo):
+    """A model dropdown that opens as a grid: each model's picture and name, with a search."""
+
+    def showPopup(self):
+        if self.count() > 1 or (self.count() == 1 and self.itemData(0)):
+            ModelGrid(self).popup()
+        else:
+            super().showPopup()
+
+
+class ModelGrid(QFrame):
+    _cache = {}                         # (cover, blurred) -> icon
+
+    def __init__(self, combo):
+        super().__init__(combo.window(), Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.combo = combo
+        self.setObjectName("ModelGrid")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setStyleSheet(f"#ModelGrid {{ background: {T.SURFACE}; border: 1px solid {T.BORDER_HI}; border-radius: 12px; }}")
+        self.resize(590, 500)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search models…")
+        self.search.textChanged.connect(self._filter)
+        self.list = QListWidget()
+        self.list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.list.setMovement(QListWidget.Movement.Static)
+        self.list.setUniformItemSizes(True)
+        self.list.setIconSize(QSize(120, 120))
+        self.list.setGridSize(QSize(136, 176))
+        self.list.setWordWrap(True)
+        self.list.setItemDelegate(BlurTextDelegate(self.list))
+        self.list.itemClicked.connect(self._pick)
+        v.addWidget(self.search)
+        v.addWidget(self.list, 1)
+        self.todo = []
+        hide = cfg.get("lora_blur_nsfw", False)
+        for i in range(combo.count()):
+            data = combo.itemData(i) or ""
+            it = QListWidgetItem(combo.itemText(i).split("   ")[0])
+            it.setData(Qt.ItemDataRole.UserRole, i)
+            it.setToolTip(combo.itemText(i).replace("   ", " "))
+            cover, blur = None, False
+            if "|" in data:
+                k = ckpts.key(*data.split("|", 1))
+                note = ckpts.notes(k).get("preview")
+                cover = note if note and os.path.isfile(note) else None
+                blur = hide and ckpts.is_nsfw(k)
+                if blur:
+                    it.setData(BLUR_ROLE, True)
+            self.list.addItem(it)
+            self.todo.append((it, cover, blur))
+            if i == combo.currentIndex():
+                self.list.setCurrentItem(it)
+        self.timer = QTimer(self, interval=0, timeout=self._load_some)
+        self.timer.start()
+
+    def popup(self):
+        at = self.combo.mapToGlobal(QPoint(0, self.combo.height() + 4))
+        screen = self.combo.screen().availableGeometry()
+        at.setY(min(at.y(), screen.bottom() - self.height() - 8))
+        self.move(at)
+        self.show()
+        self.search.setFocus()
+        cur = self.list.currentItem()
+        if cur is not None:
+            self.list.scrollToItem(cur)
+
+    def _load_some(self):
+        from .characters_page import tile
+        for it, cover, blur in self.todo[:4]:
+            key = (cover, blur)
+            if key not in self._cache:
+                self._cache[key] = tile(cover, 240, "chip", blur)
+            it.setIcon(self._cache[key])
+        del self.todo[:4]
+        if not self.todo:
+            self.timer.stop()
+
+    def _filter(self, text):
+        words = text.lower().split()
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            it.setHidden(not all(w in it.toolTip().lower() for w in words))
+
+    def _pick(self, it):
+        self.combo.setCurrentIndex(it.data(Qt.ItemDataRole.UserRole))
+        self.close()
+
+
 class PromptCard(Card):
     """Prompt + words to avoid, history, token count, optional quick chips."""
     changed = Signal()
@@ -246,7 +340,7 @@ class PromptCard(Card):
         self.edit.submit.connect(self.submit.emit)
         self.hist_btn.clicked.connect(lambda: history_menu(self, self.set_text).exec(
             self.hist_btn.mapToGlobal(self.hist_btn.rect().bottomLeft())))
-        self.clear_btn.clicked.connect(lambda: self.edit.setPlainText(""))
+        self.clear_btn.clicked.connect(self._clear)
         self.ai_btn.clicked.connect(self._helper_menu)
         self.add(self.edit)
         from .helper_ui import Panel
@@ -288,6 +382,13 @@ class PromptCard(Card):
         return self.edit.toPlainText()
 
     # ---- prompt helper and tag suggestions
+    def _clear(self):
+        was = self.edit.toPlainText()
+        self.edit.setPlainText("")
+        win = self.window()
+        if was.strip() and hasattr(win, "toasts"):
+            win.toasts.show_toast("Prompt cleared.", "info", 8000, ("Undo", lambda: self.edit.setPlainText(was)))
+
     def refresh_helper(self):
         self.ai_btn.setVisible(bool(cfg.get("helper_button", True)))
 
@@ -1056,6 +1157,7 @@ class ResultPane(QWidget):
         self._enable()
         history.added.connect(self._added)
         history.removed.connect(self._removed)
+        history.restored.connect(self.reload)
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls() and any(u.toLocalFile().lower().endswith(media.IMAGE_EXT)

@@ -483,20 +483,21 @@ class GalleryPage(QWidget):
         self.b = {}
         acts = [("reuse", "Reuse", "refresh"), ("start", "Use as start", "image"), ("animate", "Animate", "video"), ("extend", "Extend", "arrow"),
                 ("upscale", "Upscale", "scale"), ("inpaint", "Edit", "edit"), ("compare", "Comparison", "gallery"),
-                ("trimcrop", "Trim and crop", "crop"), ("copyprompt", "Copy prompt", "copy"),
+                ("trimcrop", "Trim and crop", "crop"), ("export", "Export…", "download"), ("copyprompt", "Copy prompt", "copy"),
                 ("folder", "Show in folder", "folder"),
                 ("move_vault", "To vault", "lock"), ("take_out", "Take out", "unlock"), ("delete", "Delete", "trash")]
         for k, t, ic in acts:
             self.b[k] = button(t, lambda k=k: self._act(k), "Ghost" if k != "reuse" else None, ic)
         acts_box = ChipBox(4)           # wraps: never cut off, whatever is shown for the picked item
-        for k in ("reuse", "start", "animate", "extend", "upscale", "inpaint", "trimcrop", "compare", "copyprompt", "folder",
+        for k in ("reuse", "start", "animate", "extend", "upscale", "inpaint", "trimcrop", "compare", "export", "copyprompt", "folder",
                   "move_vault", "take_out", "delete"):
             acts_box.add(self.b[k])
         sv.addWidget(acts_box)
         self.multi = label("", "Faint")
         self.multi_join = button("Join", lambda: self.app.join_entries(self._selected()), "Ghost", "film")
         self.multi_anim = button("Animate", lambda: self.app.animate_entries(self._selected()), "Ghost", "video")
-        self.multi_row = hrow(self.multi, None, self.multi_anim, self.multi_join, spacing=4)
+        self.multi_export = button("Export…", lambda: self.app.export_entries(self._selected()), "Ghost", "download")
+        self.multi_row = hrow(self.multi, None, self.multi_export, self.multi_anim, self.multi_join, spacing=4)
         sv.addWidget(self.multi_row)
         self.grid.itemSelectionChanged.connect(self._sel_changed)
         h.addWidget(side)
@@ -511,6 +512,7 @@ class GalleryPage(QWidget):
             sc.setContext(Qt.ShortcutContext.WidgetShortcut)
         self.history.added.connect(self._changed)
         self.history.removed.connect(self._changed)
+        self.history.restored.connect(self._changed)
         self.history.updated.connect(self._updated)
         self.history.changed.connect(self._fill_nav)
         self.history.reloaded.connect(self.drives_changed)
@@ -1545,9 +1547,16 @@ class GalleryPage(QWidget):
                 self.vault_flags(ids)
             if self._in_vault():
                 return
-        for e in [x for x in self.history.items if x.get("marked")]:
+        was = [x for x in self.history.items if x.get("marked")]
+        for e in was:
             self.history.update(e["id"], marked=False)
         self.fill()
+        if was:
+            def again():
+                for e in was:
+                    self.history.update(e["id"], marked=True)
+                self.fill()
+            self.app.toasts.show_toast(f"Unmarked {len(was)}.", "info", 8000, ("Undo", again))
 
     def _delete_marked(self):
         if vault.is_open() and (self._in_vault() or self.place == "marked"):
@@ -1615,6 +1624,9 @@ class GalleryPage(QWidget):
             return
         if k == "trimcrop":
             self.app.edit_entry(self.cur)
+            return
+        if k == "export":
+            self.app.export_entries(self._selected())
             return
         if k == "take_out":
             self.app.take_out_of_vault([e for e in self._selected() if e.get("vault")])

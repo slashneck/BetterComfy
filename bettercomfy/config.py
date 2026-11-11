@@ -92,6 +92,8 @@ DEFAULTS = {
     "stores": [],                     # drives for pictures and vault files: [{id, path, serial, label, kind}]
     "cards_folded": [],               # the cards folded away on the Image and Video pages
     "nav_folded": [],                 # the groups folded away in the left rail
+    "clean_copies": False,            # a second file of each result without prompt and settings (not private jobs)
+    "export_dir": "",
     "panic_key": "",                  # the key combination that hides the app and locks the vault
     "ui_scale": 100,                  # size of the whole interface, in percent (applies at the next start)
     "clean_start": True,              # each start with an empty prompt and result strip (the gallery keeps all)

@@ -21,6 +21,7 @@ class History(QObject):
     updated = Signal(str)
     changed = Signal()                  # collections changed
     reloaded = Signal()                 # a drive was plugged in or out: what shows changed
+    restored = Signal()                 # entries came back (Undo)
     _bg_removed = Signal(list)
 
     def __init__(self):
@@ -148,6 +149,35 @@ class History(QObject):
             self._rewrite(shred_old=purge)
         for i in ids:
             self.removed.emit(i)
+
+    def hide_many(self, ids):
+        """Out of every list at once; the gallery file changes when it is final (commit_hidden), so Undo can bring them
+        back and a killed app loses nothing."""
+        ids = set(ids)
+        with self._lock:
+            self.items = [e for e in self.items if e.get("id") not in ids]
+            for i in ids:
+                self._by_id.pop(i, None)
+        for i in ids:
+            self.removed.emit(i)
+
+    def commit_hidden(self, purge=False):
+        with self._lock:
+            self._rewrite(shred_old=purge)
+
+    def put_back(self, entries):
+        with self._lock:
+            for e in entries:
+                self._by_id[e["id"]] = e
+            self.items = sorted(self.items + list(entries), key=lambda e: e.get("created", ""))
+            self._rewrite()
+        self.restored.emit()
+
+    def usage(self, ckpt=None, lora=None):
+        """(how many results in the gallery were made with it, when the last one was)."""
+        hits = [e.get("created", "") for e in self.items
+                if (ckpt and e.get("model") == ckpt) or (lora and lora in (e.get("loras") or []))]
+        return len(hits), max(hits) if hits else ""
 
     def get(self, eid):
         return self._by_id.get(eid)

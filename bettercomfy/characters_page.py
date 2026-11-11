@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QFileDialog, QHBoxLay
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QVBoxLayout, QWidget)
 
 from . import charlib, icons, theme as T
-from .widgets import Card, Combo, ImageDrop, Scroll, Slider, button, field, hrow, label, nice_name, quiet, set_combo
+from .widgets import (Card, Combo, ImageDrop, Scroll, Slider, blur_pixmap, button, field, hrow, label, nice_name, quiet,
+                      set_combo)
 
 ADDON_NOTE = ("Add-ons are programs that run inside ComfyUI with full access to your PC, and ComfyUI doesn't check them. "
               "This one, ComfyUI_IPAdapter_plus, is open source (GPL-3.0) and widely used, and Better Comfy only fetches "
@@ -16,8 +17,8 @@ ADDON_NOTE = ("Add-ons are programs that run inside ComfyUI with full access to 
               "taken out again here at any time.")
 
 
-def tile(path, s=300):
-    """A rounded square of a character's picture (or a placeholder)."""
+def tile(path, s=300, placeholder="person", blur=False):
+    """A rounded square of a picture (or a placeholder icon)."""
     out = QPixmap(s, s)
     out.fill(Qt.GlobalColor.transparent)
     p = QPainter(out)
@@ -30,9 +31,11 @@ def tile(path, s=300):
     pm = QPixmap(path) if path else QPixmap()
     if not pm.isNull():
         pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        if blur:
+            pm = blur_pixmap(pm, 14)
         p.drawPixmap((s - pm.width()) // 2, (s - pm.height()) // 2, pm)
     else:
-        p.drawPixmap(s // 2 - s // 8, s // 2 - s // 8, icons.pixmap("person", s // 4, "#3A3A40", dpr=1.0))
+        p.drawPixmap(s // 2 - s // 8, s // 2 - s // 8, icons.pixmap(placeholder, s // 4, "#3A3A40", dpr=1.0))
     p.end()
     out.setDevicePixelRatio(2.0)
     return QIcon(out)

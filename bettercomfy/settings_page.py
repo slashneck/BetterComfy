@@ -159,6 +159,10 @@ class SettingsPage(QWidget):
                         cfg.get("clean_start", True), lambda v: cfg.set("clean_start", v)),
               ToggleRow("A folder per day", "e.g. …/2026-10-08/", cfg.get("date_folders"),
                         lambda v: cfg.set("date_folders", v)),
+              ToggleRow("Also save a clean copy", "A second file of every result in a \"clean\" folder next to it, "
+                                                  "with no prompt or settings inside. Good for sharing. Private jobs "
+                                                  "stay private and get none.", cfg.get("clean_copies", False),
+                        lambda v: cfg.set("clean_copies", v)),
               ToggleRow("Settings inside the PNG", "Prompt, seed, model - and the workflow, so dropping the picture "
                                                   "on ComfyUI opens it", cfg.get("embed_metadata"),
                         lambda v: cfg.set("embed_metadata", v)),

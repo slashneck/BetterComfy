@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QDoubleSpinBox, QHBoxLayout, QListWidget, QListWi
                                QWidget)
 
 from . import assistant, jobs, media, workflows as W
-from .components import GenerateBar, LoraStack, PromptCard, ResultPane, SeedBox, UserPresets, remember_prompt
+from .components import GenerateBar, LoraStack, ModelPicker, PromptCard, ResultPane, SeedBox, UserPresets, remember_prompt
 from .config import cfg
 from .widgets import (Combo, AspectPreview, Card, ChipBox, Collapsible, ImageDrop, PresetPicker, Scroll, Segmented, Slider,
                       ToggleRow, button, chip, field, hrow, icon_button, label, nice_name, quiet, set_combo, human_time)
@@ -58,7 +58,7 @@ class ImagePage(QWidget):
         sc.add(self.presets)
 
         # model
-        self.ckpt = Combo()
+        self.ckpt = ModelPicker()
         self.ckpt.currentIndexChanged.connect(self._pick_model)
         self.family = Combo()
         self.family.addItem("Auto", "auto")

@@ -37,6 +37,7 @@ GROUPS = [("Create", [("image", "Image", "image"), ("video", "Video", "video")])
           ("Custom", [("characters", "Characters", "person"), ("train", "Train", "dumbbell")])]
 PAGES = [it for _g, items in GROUPS for it in items]
 BOTTOM = [("settings", "Settings", "settings")]
+UNDO_MS = 8000                                      # how long a delete can still be taken back
 
 
 class Countdown(QDialog):
@@ -222,6 +223,8 @@ class Window(QMainWindow):
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.quick_search)
         QShortcut(QKeySequence("F1"), self, activated=lambda: Shortcuts(self).exec())
         self._panicked = False
+        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.undo_delete)
+        self._pending_deletes = []
         self.global_key = GlobalKey(QApplication.instance(), self.panic)
         self.global_key.bind(cfg.get("panic_key") or "")
         self._tray()
@@ -901,15 +904,48 @@ class Window(QMainWindow):
                 q += "\n\nA USB stick or other drive has no Recycle Bin: what is on one is deleted for good."
             if QMessageBox.question(self, "Delete", q) != QMessageBox.StandardButton.Yes:
                 return
+        self.history.hide_many([e["id"] for e in entries])
+        if self.viewer.isVisible():
+            self.viewer.drop([e["id"] for e in entries])
+        batch = {"entries": entries, "mode": mode, "done": False}
+        self._pending_deletes.append(batch)
+        QTimer.singleShot(UNDO_MS, lambda: self._commit_delete(batch))
+        word = {"recycle": "Moved to the Recycle Bin", "shred": "Shredding", "eraser": "Erasing"}[mode]
+        self.toasts.show_toast(f"{word}: {n} item{'s' if n != 1 else ''}", "info", UNDO_MS,
+                               ("Undo", lambda: self.undo_delete(batch)))
+
+    def undo_delete(self, batch=None):
+        """Brings back what was just deleted (Undo on its message, or Ctrl+Z)."""
+        batch = batch or (self._pending_deletes[-1] if self._pending_deletes else None)
+        if batch is None or batch["done"]:
+            return
+        batch["done"] = True
+        self._pending_deletes.remove(batch)
+        self.history.put_back(batch["entries"])
+        self.toast("It's back.", "ok")
+
+    def _flush_deletes(self):
+        for batch in list(self._pending_deletes):
+            self._commit_delete(batch, wait=True)
+
+    def _commit_delete(self, batch, wait=False):
+        if batch["done"]:
+            return
+        batch["done"] = True
+        self._pending_deletes.remove(batch)
+        from . import shred
+        from .export import clean_path
+        entries, mode, n = batch["entries"], batch["mode"], len(batch["entries"])
         files, caches = [], []
         for e in entries:
             if e.get("file"):
                 files.append(e["file"])
-                if os.path.isfile(e["file"] + ".json"):
-                    files.append(e["file"] + ".json")
+                for extra in (e["file"] + ".json", clean_path(e["file"])):
+                    if os.path.isfile(extra):
+                        files.append(extra)
             if e.get("thumb"):
                 caches.append(e["thumb"])
-        self.history.remove_many([e["id"] for e in entries], purge=mode != "recycle")
+        self.history.commit_hidden(purge=mode != "recycle")
         self.forget_pictures([e["file"] for e in entries])
         self.queue.forget_entries([e["id"] for e in entries])
         if cfg.get("forget_prompts", True):
@@ -920,8 +956,6 @@ class Window(QMainWindow):
             new = [t for t in hist if t.strip() not in gone or t.strip() in still]
             if len(new) != len(hist):
                 cfg.set("prompt_history", new)
-        if self.viewer.isVisible():
-            self.viewer.drop([e["id"] for e in entries])
         if mode == "recycle":
             shred.delete(files, "recycle")
             for c in caches:
@@ -930,12 +964,14 @@ class Window(QMainWindow):
                 except OSError:
                     pass
             return
-        self.toast(f"{'Shredding' if mode == 'shred' else 'Erasing'} {n} item{'s' if n != 1 else ''}…", "info")
 
         def work():
             left = shred.delete(files + caches, mode)
             self._shredded.emit(n, len([f for f in left if f in files]))
-        threading.Thread(target=work, daemon=True).start()
+        if wait:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
 
     # ---- drives (Settings, Drives)
     def _stores_changed(self):
@@ -1343,6 +1379,10 @@ class Window(QMainWindow):
         self.tray.activated.connect(lambda r: self._show() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
         self.tray.show()
 
+    def export_entries(self, entries):
+        from .export import ExportDialog
+        ExportDialog(self, entries).exec()
+
     def quick_search(self):
         QuickSearch(self).exec()
 
@@ -1442,6 +1482,7 @@ class Window(QMainWindow):
         return box.clickedButton() is lose
 
     def _shutdown_cleanup(self):
+        self._flush_deletes()
         vault.lock()
         drag_out_clear()
         from . import assistant

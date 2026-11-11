@@ -1457,7 +1457,8 @@ class Toasts(QWidget):
         self.items = []
         self.hide()
 
-    def show_toast(self, text, kind="info", ms=3800):
+    def show_toast(self, text, kind="info", ms=3800, action=None):
+        """action: (button text, function): the button closes the toast and calls it."""
         host = self.parentWidget()
         t = QFrame(host)
         t.setObjectName("Toast")
@@ -1475,8 +1476,11 @@ class Toasts(QWidget):
         lb.setMaximumWidth(360)
         lb.setMinimumWidth(min(360, QFontMetrics(lb.font()).horizontalAdvance(text) + 4))
         h.addWidget(lb)
+        if action:
+            b = button(action[0], lambda: (action[1](), self._close(t)), "Ghost")
+            h.addWidget(b)
         t.adjustSize()
-        t.setFixedWidth(min(420, max(240, t.sizeHint().width())))
+        t.setFixedWidth(min(480 if action else 420, max(240, t.sizeHint().width())))
         t.adjustSize()
         eff = QGraphicsOpacityEffect(t)
         eff.setOpacity(0.0)

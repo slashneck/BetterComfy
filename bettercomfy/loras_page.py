@@ -106,6 +106,8 @@ class LorasPage(QWidget):
         self.half_badge.hide()
         self.badges.layout().addWidget(self.half_badge)
         self.badges.layout().addWidget(self.info_badge)
+        self.usage = label("", "Faint")
+        self.badges.layout().addWidget(self.usage)
         self.badges.layout().addStretch(1)
         self.star = button("", self._toggle_fav, "Ghost", "star", "Favourite (shown first everywhere)", checkable=True)
         self.eye = icon_button("eye", self._reveal_toggle, "Show the name and preview of this NSFW LoRA", size=16)
@@ -422,6 +424,9 @@ class LorasPage(QWidget):
             self._revealed = None
         self.name.setText(nice_name(n))
         self.file.setText(n)
+        n_used, last = self.app.history.usage(lora=n)
+        self.usage.setText(f"Used {n_used}x" if n_used else "")
+        self.usage.setToolTip(f"In your gallery. Last time: {last[:10]}" if n_used else "")
         hidden = self._hidden(n)
         for w in (self.name, self.file, self.prev):
             blur_widget(w, hidden, 12)

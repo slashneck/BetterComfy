@@ -393,6 +393,9 @@ def _run_image(ctx, job, c, p, op, src, lists, private, trail):
                 ctx.output(dict(e, _item=i, vault=True))
                 continue
             size = media.save_png(data, path, text)
+            if cfg.get("clean_copies"):
+                from .export import clean_copy
+                clean_copy(path)
             thumb = media.thumbnail(path, os.path.join(BASE, "thumbs", os.path.basename(path)[:-4] + f"_{job['id']}.jpg"))
             e = {"kind": "image", "file": path, "thumb": thumb, "w": size[0], "h": size[1], "seed": seed,
                  "prompt": q.get("prompt", ""), "final_prompt": pos, "negative": neg, "model": q.get("ckpt"),
@@ -528,6 +531,9 @@ def _run_video(ctx, job, c, p, mode, private, trail):
             continue
         path = media.unique(os.path.join(_out_dir("video"), f"BC_{stamp}_{seed}.{fmt}"))
         media.write_video(frames, fps, path, fmt, int(p.get("crf", 16)))
+        if cfg.get("clean_copies"):
+            from .export import clean_copy
+            clean_copy(path)
         thumb = media.thumbnail(frames[0], os.path.join(BASE, "thumbs", os.path.basename(path).rsplit(".", 1)[0] +
                                                         f"_{job['id']}.jpg"))
         try:

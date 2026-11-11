@@ -115,7 +115,8 @@ class CheckpointsPage(QWidget):
         self.fam_badge = label("", "AccentBadge")
         self.type_badge = label("", "Badge")
         self.size_badge = label("", "Badge")
-        for w in (self.fam_badge, self.type_badge, self.size_badge):
+        self.usage = label("", "Faint")
+        for w in (self.fam_badge, self.type_badge, self.size_badge, self.usage):
             self.badges.layout().addWidget(w)
         self.badges.layout().addStretch(1)
         self.parts_lbl = label("", "Muted", wrap=True)
@@ -436,6 +437,9 @@ class CheckpointsPage(QWidget):
         fam = ckpts.made_for(k, kind)
         self.fam_badge.setText(loras.FAMILY_NAMES.get(fam, fam))
         self.type_badge.setText(ckpts.TYPE_NAMES[src])
+        n, last = self.app.history.usage(ckpt=ckpts.split(k)[1])
+        self.usage.setText(f"Used {n}x" if n else "")
+        self.usage.setToolTip(f"In your gallery. Last time: {last[:10]}" if n else "")
         sz = self._size(k)
         self.size_badge.setText(f"{sz / 2 ** 30:.1f} GB" if sz >= 2 ** 30 else f"{sz / 2 ** 20:.0f} MB")
         self.made.blockSignals(True)
