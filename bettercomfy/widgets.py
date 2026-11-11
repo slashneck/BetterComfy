@@ -1159,7 +1159,6 @@ class Player(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        p.fillRect(self.rect(), T.col(T.BG))
         if self.frames:
             pm = self.frames[self.i % len(self.frames)]
             tr = self.image_rect()
@@ -1181,6 +1180,13 @@ class Player(QWidget):
                 p.drawPixmap(QPointF(c.x() - 13, c.y() - 14), icons.pixmap("play", 28, "#FFFFFF"))
         else:
             c = QRectF(self.rect()).center()
+            # no background of its own (a moving one shows through): only a quiet backing for the message
+            back = T.col(T.BG)
+            back.setAlpha(170)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(back)
+            wide = min(self.width() - 32, 540)
+            p.drawRoundedRect(QRectF(c.x() - wide / 2, c.y() + 8, wide, 96), 16, 16)
             if not self.logo.isNull():
                 p.setOpacity(0.10)
                 s = 92

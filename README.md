@@ -124,7 +124,8 @@ Ctrl+Up and Down to weight a word, `{a|b|c}` to pick one per picture, accent col
 
 **Handy.** Ctrl+K jumps to any tab, setting, model, LoRA or character, and F1 lists every shortcut. Deletes and a few other
 actions can be undone for a few seconds. A panic key hides the app and locks the vault from anywhere. Settings, Privacy has a log of
-everything the app connected to since it opened. Light mode, moving backgrounds, an interface size setting, one-zip backups.
+everything the app connected to since it opened. Light mode, moving backgrounds, an interface size setting, one-zip backups. Pictures you put in
+`Pictures\Better Comfy\Dot art` show up as Dot art backgrounds: the picture made of slowly drifting particles.
 
 ## What you need
 

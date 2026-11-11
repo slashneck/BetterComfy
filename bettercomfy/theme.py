@@ -142,12 +142,14 @@ QDialog {{ background: {PANEL}; }}
 QToolTip {{ background: {SURFACE2}; color: {TEXT}; border: 1px solid {BORDER_HI}; padding: 6px 9px; border-radius: 6px; }}
 
 #Main {{ background: transparent; }}
-#Card {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 14px; }}
+#Card {{ background: {rgba(SURFACE, 222)}; border: 1px solid {BORDER}; border-radius: 14px; }}
 #Card[flat="true"] {{ background: transparent; border: none; }}
-#Panel {{ background: {PANEL}; border-left: 1px solid {BORDER}; }}
-#PanelR {{ background: {PANEL}; border-right: 1px solid {BORDER}; }}
+#Panel {{ background: {rgba(PANEL, 212)}; border-left: 1px solid {BORDER}; }}
+#PanelR {{ background: {rgba(PANEL, 212)}; border-right: 1px solid {BORDER}; }}
 #Divider {{ background: {BORDER}; max-height: 1px; min-height: 1px; }}
 #ScrollBody {{ background: transparent; }}
+#Note {{ background: {rgba(BG, 200)}; border-radius: 12px; }}
+QLabel#Note {{ padding: 12px 18px; }}
 
 QLabel {{ background: transparent; }}
 QLabel#H1 {{ font-size: 21px; font-weight: 600; letter-spacing: -0.2px; }}

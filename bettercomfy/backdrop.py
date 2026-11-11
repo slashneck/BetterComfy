@@ -21,6 +21,7 @@ DENSITY = 0.42                          # particles per pixel of the picture
 _LAYERS = 8                             # groups of particles that move separately (and 2 more for the loose ones)
 _DRIFT = 2                              # how many pixels they wander
 _DRIFT_LOOSE = 7                        # the loose ones around the edges wander further
+_ART_OPACITY = 0.42
 _PAD = 40                               # room around the picture for the haze
 _LINE = 0.075                           # up to this brightness a thin stroke counts as an outline
 _COLOURED = 0.34                        # from this saturation on, a place in the picture counts as having colour
@@ -573,6 +574,7 @@ class Backdrop(QWidget):
         self._paint_stars(p)
         if not self.art_layers or self.base is None:
             return
+        p.setOpacity(_ART_OPACITY)              # a little held back, so the pages on top stay easy to read
         p.drawPixmap(self.art_origin, self.base)
         # near the cursor the particles simply light up, softly, more the closer they are
         m = self.mouse
@@ -593,3 +595,4 @@ class Backdrop(QWidget):
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
         p.drawPixmap(spot.topLeft() + self.art_origin, glow)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        p.setOpacity(1.0)

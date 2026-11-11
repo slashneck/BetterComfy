@@ -136,7 +136,9 @@ class StoragePage(QWidget):
         self.move_btn = button("Move…", self._move, "Ghost", "folder")
         self.comp_btn = button("Compress…", self._compress, "Ghost", "scale")
         self.refresh_btn = button("", lambda: self.scan(), "Ghost", "refresh", "Measure again")
-        v.addWidget(hrow(self.show_what, self.sel_text, None, self.comp_btn, self.move_btn, self.del_btn, self.refresh_btn,
+        box = Card(None, margins=(14, 12, 14, 12))     # one calm surface: the list stays readable over a background
+        v.addWidget(box, 1)
+        box.body.addWidget(hrow(self.show_what, self.sel_text, None, self.comp_btn, self.move_btn, self.del_btn, self.refresh_btn,
                          spacing=6))
         self.tree = QTreeWidget()
         self.tree.setRootIsDecorated(False)
@@ -148,15 +150,15 @@ class StoragePage(QWidget):
         self.tree.setColumnWidth(1, 150)
         self.tree.setColumnWidth(2, 110)
         self.tree.itemSelectionChanged.connect(self._selection)
-        v.addWidget(self.tree, 1)
+        box.body.addWidget(self.tree, 1)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.setTextVisible(False)
         self.bar.hide()
         self.status = label("", "Faint")
         self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        v.addWidget(self.bar)
-        v.addWidget(self.status)
+        box.body.addWidget(self.bar)
+        box.body.addWidget(self.status)
         self.todo = []
         self.timer = QTimer(self, interval=0, timeout=self._load_thumbs)
         self._scanned.connect(self._got_scan)

@@ -432,6 +432,7 @@ class GalleryPage(QWidget):
                                 "QListWidget::item:selected { background: #222226; }")
         lv.addWidget(self.grid, 1)
         self.empty = label("", "Muted")
+        self.empty.setObjectName("Note")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty.setWordWrap(True)
         lv.addWidget(self.empty, 1)

@@ -142,6 +142,8 @@ class CharactersPage(QWidget):
         self.grid.currentItemChanged.connect(lambda cur, _p: cur and self.open_char(cur.data(Qt.ItemDataRole.UserRole)))
         lv.addWidget(self.grid, 1)
         self.empty = QWidget()
+        self.empty.setObjectName("Note")
+        self.empty.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         ev = QVBoxLayout(self.empty)
         ev.setSpacing(8)
         ev.addStretch(1)

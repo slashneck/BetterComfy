@@ -252,7 +252,9 @@ class QueuePage(QWidget):
         self.empty = vcol(label("The queue is empty", "H2"),
                           label("Everything you press Generate on waits here and runs one after the other - pictures "
                                 "and videos mixed. You can keep adding while it works.", "Muted", wrap=True),
-                          spacing=6)
+                          spacing=6, margins=(18, 14, 18, 14))
+        self.empty.setObjectName("Note")
+        self.empty.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.rows = {}
         self.expanded = set()
         q.changed.connect(self.rebuild)
