@@ -67,7 +67,7 @@ def stipple(img, height, invert=False, detail=1.0):
     top = c.max(axis=1)
     sat = np.where(top > 40, (top - c.min(axis=1)) / np.maximum(top, 1), 0)
     red = (sat > _COLOURED) & (c[:, 0] > c[:, 1] * 1.35) & (c[:, 0] > c[:, 2] * 1.25)
-    blue = (sat > 0.1) & (c[:, 2] > c[:, 0] * 1.05)
+    blue = (sat > 0.1) & (top < 140) & (c[:, 2] > c[:, 0] * 1.05)    # dark blue only: pale skin can be a bit blue too
     v = np.where(blue, v * 0.1, v)             # only white, black and red: blue goes black
     v = np.maximum(v, np.where(red, 0.62, 0))
     keep = v ** 1.15 > rng.random(n)
