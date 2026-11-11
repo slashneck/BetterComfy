@@ -4,11 +4,11 @@ import os
 import sys
 import threading
 
-from PySide6.QtCore import QEasingCurve, QEvent, QObject, QVariantAnimation, QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEventLoop, QPropertyAnimation, QEasingCurve, QEvent, QObject, QVariantAnimation, QPoint, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QImage, QKeySequence,
                            QPalette, QShortcut)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDialog, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDialog, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
                                QMainWindow, QScrollArea, QSlider, QStyleFactory, QMenu, QMessageBox,
                                QSystemTrayIcon, QVBoxLayout, QWidget)
 
@@ -31,7 +31,7 @@ from .backdrop import Backdrop
 from .hotkey import GlobalKey
 from .storage_page import StoragePage
 from .quick import QuickSearch, Shortcuts
-from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, icon_button, label
+from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, icon_button, label, logo_pixmap
 
 GROUPS = [("Create", [("image", "Image", "image"), ("video", "Video", "video")]),
           ("Library", [("queue", "Queue", "queue"), ("gallery", "Gallery", "gallery"), ("storage", "Storage", "hdd")]),
@@ -1367,17 +1367,36 @@ class Window(QMainWindow):
         QTimer.singleShot(0, self._apply_accent)    # after the click: the button pressed gets restyled as well
 
     def _apply_accent(self):
+        def work():
+            T.set_accent(cfg.get("accent"))
+            QApplication.instance().setStyleSheet(T.qss())
+            for pg in ("image", "video"):
+                self.pages[pg].bar.refresh_style()
+        self._restyle(work)
+
+    def _restyle(self, work):
+        """Applying a new look to every control takes a moment: the window as it was stays up, then fades into the new one."""
+        root = self.centralWidget()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.setUpdatesEnabled(False)
-        T.set_accent(cfg.get("accent"))
-        _palette(QApplication.instance())
-        QApplication.instance().setStyleSheet(T.qss())
-        for pg in ("image", "video"):
-            self.pages[pg].bar.refresh_style()
-        self.setUpdatesEnabled(True)
-        QApplication.restoreOverrideCursor()
+        cover = QLabel(root)
+        cover.setPixmap(root.grab())
+        cover.setGeometry(root.rect())
+        cover.show()
+        cover.raise_()
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        try:
+            work()
+        finally:
+            QApplication.restoreOverrideCursor()
         self._fit_counts()
-        self.update()
+        eff = QGraphicsOpacityEffect(cover)
+        cover.setGraphicsEffect(eff)
+        fade = QPropertyAnimation(eff, b"opacity", cover)
+        fade.setDuration(220)
+        fade.setStartValue(1.0)
+        fade.setEndValue(0.0)
+        fade.finished.connect(cover.deleteLater)
+        fade.start()
 
     def _fit_counts(self):
         """A new look lays the number boxes out again, with room for arrows they don't have."""
@@ -1414,31 +1433,36 @@ class Window(QMainWindow):
 
     def _toggle_mode(self):
         """Light or dark, at once and for good."""
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.setUpdatesEnabled(False)
-        mode = "dark" if T.MODE == "light" else "light"
-        cfg.set("ui_mode", mode)
-        T.set_mode(mode)
-        app = QApplication.instance()
-        _palette(app)
-        app.setStyleSheet(T.qss())
-        T.reapply()
-        for w in app.allWidgets():
-            ic = w.property("_icon")
-            if ic and isinstance(w, QAbstractButton):
-                w.setIcon(icons.icon(ic[0], ic[1], 18))
-        self.top.mode_btn.setIcon(icons.icon("sun" if mode == "dark" else "moon", "#A1A1AA", 18))
-        self.top.mode_btn.setProperty("_icon", ["sun" if mode == "dark" else "moon", "#A1A1AA"])
-        for key in ("loras", "models"):         # their placeholders have the page's colour; the gallery's are pictures
-            pg = self.pages[key]
-            pg._icons.clear()
-            if pg.isVisible():
-                pg.fill()
-        self.backdrop.rebuild()
-        self.setUpdatesEnabled(True)
-        QApplication.restoreOverrideCursor()
-        self._fit_counts()
-        self.update()
+        def work():
+            mode = "dark" if T.MODE == "light" else "light"
+            cfg.set("ui_mode", mode)
+            T.set_mode(mode)
+            app = QApplication.instance()
+            _palette(app)
+            app.setStyleSheet(T.qss())
+            T.reapply()
+            for w in app.allWidgets():
+                ic = w.property("_icon")
+                if ic and isinstance(w, QAbstractButton):
+                    w.setIcon(icons.icon(ic[0], ic[1], 18))
+            name = "sun" if mode == "dark" else "moon"
+            self.top.mode_btn.setIcon(icons.icon(name, "#A1A1AA", 18))
+            self.top.mode_btn.setProperty("_icon", [name, "#A1A1AA"])
+            for key in ("loras", "models"):     # their placeholders have the page's colour; the gallery's are pictures
+                pg = self.pages[key]
+                pg._icons.clear()
+                if pg.isVisible():
+                    pg.fill()
+            self.backdrop.rebuild()
+            self._brand()
+        self._restyle(work)
+
+    def _brand(self):
+        """The logo and the window's title bar in the current mode."""
+        light = T.MODE == "light"
+        self.rail.refresh_logo()
+        self.setWindowIcon(QIcon(logo_pixmap()) if light else QIcon(resource("assets", "icon.ico")))
+        system.dark_title_bar(self.winId(), "#FFFFFF" if light else "#09090A", light)
 
     def set_backdrop(self, kind):
         cfg.set("backdrop", kind)
@@ -1494,7 +1518,7 @@ class Window(QMainWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
-        system.dark_title_bar(self.winId())
+        self._brand()
 
     def closeEvent(self, e):
         if getattr(self, "_quitting", False):

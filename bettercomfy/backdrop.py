@@ -1,6 +1,6 @@
 """The moving backgrounds (Settings, Look & feel): behind everything, only drawn while the app is in front. Under another
-program, or a game, they stop completely. No pictures come with them: each picture kept in the backdrop_art folder of
-the data folder is offered as a Dot art background of its own."""
+program, or a game, they stop completely. No pictures come with them: each picture in the folder Pictures\\Better
+Comfy\\Dot art is offered as a Dot art background of its own."""
 import math
 import os
 import random
@@ -11,10 +11,9 @@ from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixma
 from PySide6.QtWidgets import QApplication, QWidget
 
 from . import theme as T
-from .config import BASE
 
 KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code", "Binary city"))
-ART_DIR = os.path.join(BASE, "backdrop_art")     # your own pictures for Dot art (they stay on this PC)
+ART_DIR = os.path.join(os.path.expanduser("~"), "Pictures", "Better Comfy", "Dot art")     # pictures for Dot art, if any
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
 DENSITY = 0.62                          # dots per pixel where a picture is at its brightest
@@ -168,6 +167,7 @@ class Backdrop(QWidget):
                     self.update(QRect(int(c.x() - r), int(c.y() - r), 2 * r, 2 * r))
         elif self.kind == "cloud":
             self._drift()
+            self._render_cloud()
             self.update()
         elif self.kind == "code":
             self._city_tick()
@@ -190,16 +190,43 @@ class Backdrop(QWidget):
         p.end()
 
     # ---- dots
+    def _build_dots(self):
+        """All the dots at rest, drawn once: a page that scrolls over them only has to copy this."""
+        w, h = self.width(), self.height()
+        self.base = QPixmap(max(1, w), max(1, h))
+        self.base.fill(Qt.GlobalColor.transparent)
+        c = QColor(T.col(T.BORDER_HI))
+        c.setAlphaF(0.55)
+        grid = QPolygonF()
+        for x in range(0, w + _GAP, _GAP):
+            for y in range(0, h + _GAP, _GAP):
+                grid.append(QPointF(x, y))
+        q = QPainter(self.base)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
+        q.setPen(QPen(c, 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        q.drawPoints(grid)
+        q.end()
+
     def _paint_dots(self, p, area):
+        if self.base is None:
+            self._build_dots()
+        m = self.mouse
+        near = QRect(int(m.x() - _REACH), int(m.y() - _REACH), 2 * _REACH, 2 * _REACH)
+        p.setClipRegion(QRegion(self.rect()).subtracted(QRegion(near, QRegion.RegionType.Ellipse)))
+        p.drawPixmap(0, 0, self.base)
+        p.setClipping(False)
+        if not near.intersects(area):
+            return
         base = T.col(T.BORDER_HI)
         accent = T.accent()
         p.setPen(Qt.PenStyle.NoPen)
-        x0 = area.left() - area.left() % _GAP
-        for x in range(x0, area.right() + _GAP, _GAP):
-            for y in range(area.top() - area.top() % _GAP, area.bottom() + _GAP, _GAP):
-                dx, dy = x - self.mouse.x(), y - self.mouse.y()
+        for x in range(max(0, near.left() - near.left() % _GAP), near.right() + _GAP, _GAP):
+            for y in range(max(0, near.top() - near.top() % _GAP), near.bottom() + _GAP, _GAP):
+                dx, dy = x - m.x(), y - m.y()
                 d = math.hypot(dx, dy)
-                k = max(0.0, 1 - d / _REACH)
+                if d >= _REACH:
+                    continue
+                k = 1 - d / _REACH
                 c = T.mix(base, accent, k)
                 c.setAlphaF(0.55 + 0.45 * k)
                 p.setBrush(c)
@@ -226,19 +253,31 @@ class Backdrop(QWidget):
             pt[0] = (pt[0] + pt[2]) % w
             pt[1] = (pt[1] + pt[3]) % h
 
-    def _paint_cloud(self, p):
+    def _render_cloud(self):
+        """One frame into a picture; a page scrolling over it only copies that."""
+        w, h = max(1, self.width()), max(1, self.height())
+        if self.base is None or self.base.width() != w or self.base.height() != h:
+            self.base = QPixmap(w, h)
+        self.base.fill(Qt.GlobalColor.transparent)
+        q = QPainter(self.base)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
         line = QColor(T.col(T.TEXT3))
         for i, a in enumerate(self.points):
             for b in self.points[i + 1:]:
                 d = abs(a[0] - b[0]) + abs(a[1] - b[1])
                 if d < 150:
                     line.setAlphaF(0.42 * (1 - d / 150))
-                    p.setPen(QPen(line, 1))
-                    p.drawLine(QPointF(a[0], a[1]), QPointF(b[0], b[1]))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(T.col(T.TEXT2))
+                    q.setPen(QPen(line, 1))
+                    q.drawLine(QPointF(a[0], a[1]), QPointF(b[0], b[1]))
+        q.setPen(Qt.PenStyle.NoPen)
+        q.setBrush(T.col(T.TEXT2))
         for a in self.points:
-            p.drawEllipse(QPointF(a[0], a[1]), 1.8, 1.8)
+            q.drawEllipse(QPointF(a[0], a[1]), 1.8, 1.8)
+        q.end()
+
+    def _paint_cloud(self, p):
+        if self.base is not None:
+            p.drawPixmap(0, 0, self.base)
 
     # ---- binary city
     def _glyph(self, ch, alpha):

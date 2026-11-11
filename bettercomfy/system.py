@@ -108,19 +108,19 @@ def sleep_pc():
     subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], creationflags=_NOWIN)
 
 
-def dark_title_bar(win_id, color="#09090A"):
-    """Windows 10/11: a dark caption (11: in the app's own black)."""
+def dark_title_bar(win_id, color="#09090A", light=False):
+    """Windows 10/11: a caption in the app's own colours (11; 10 only knows dark or light)."""
     if os.name != "nt":
         return
     try:
         hwnd = int(win_id)
         dwm = ctypes.windll.dwmapi
-        on = ctypes.c_int(1)
+        on = ctypes.c_int(0 if light else 1)
         dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on))
         c = color.lstrip("#")
         bgr = ctypes.c_int(int(c[4:6] + c[2:4] + c[0:2], 16))
         dwm.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(bgr), ctypes.sizeof(bgr))       # caption colour
-        txt = ctypes.c_int(0x00F5F4F4)
+        txt = ctypes.c_int(0x001B1818 if light else 0x00F5F4F4)
         dwm.DwmSetWindowAttribute(hwnd, 36, ctypes.byref(txt), ctypes.sizeof(txt))       # caption text
         corner = ctypes.c_int(2)
         dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(corner), ctypes.sizeof(corner))  # rounded corners

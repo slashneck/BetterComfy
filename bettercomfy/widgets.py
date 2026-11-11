@@ -1679,6 +1679,16 @@ class NavButton(QAbstractButton):
         p.end()
 
 
+def logo_pixmap():
+    """The app's logo: in light mode with its colours turned around."""
+    pm = QPixmap(resource("assets", "icon.png"))
+    if T.MODE == "light" and not pm.isNull():
+        img = pm.toImage()
+        img.invertPixels()
+        pm = QPixmap.fromImage(img)
+    return pm
+
+
 class NavHeader(QAbstractButton):
     """A small group title in the rail; click it to fold the group."""
 
@@ -1737,12 +1747,8 @@ class NavRail(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(4, 14, 4, 12)
         v.setSpacing(2)
-        logo = QLabel()
-        pm = QPixmap(resource("assets", "icon.png"))
-        if not pm.isNull():
-            pm = pm.scaled(76, 76, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            pm.setDevicePixelRatio(2.0)
-            logo.setPixmap(pm)
+        self.logo = logo = QLabel()
+        self.refresh_logo()
         logo.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         logo.setToolTip("Better Comfy")
         v.addWidget(logo)
@@ -1779,6 +1785,13 @@ class NavRail(QWidget):
         self._a.setDuration(280)
         self._a.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._a.valueChanged.connect(lambda v: (setattr(self, "_y", float(v)), self.update()))
+
+    def refresh_logo(self):
+        pm = logo_pixmap()
+        if not pm.isNull():
+            pm = pm.scaled(76, 76, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            pm.setDevicePixelRatio(2.0)
+            self.logo.setPixmap(pm)
 
     def fold(self, title, save=True):
         hd, keys = self.groups[title]
