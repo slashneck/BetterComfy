@@ -5,7 +5,7 @@ import threading
 from collections import deque
 
 from PySide6.QtCore import QEasingCurve, QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QDrag, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QDrag, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QSpinBox, QStyledItemDelegate, QStyleOptionViewItem,
                                QMenu, QMessageBox, QPlainTextEdit, QVBoxLayout, QWidget)
@@ -21,7 +21,7 @@ from . import stores
 SORTS = [("new", "Newest first"), ("old", "Oldest first"), ("model", "Checkpoint"), ("lora", "LoRA"),
          ("preset", "Preset"), ("type", "Type"), ("size", "Size")]
 LIBRARY = [("all", "All", "gallery"), ("fav", "Favourites", "starf"), ("marked", "Marked for deletion", "trash"),
-           ("image", "Images", "image"), ("video", "Videos", "video")]
+           ("image", "Images", "image"), ("video", "Videos", "video"), ("dups", "Duplicates", "layers")]
 
 
 def _matches(e, f):
@@ -303,6 +303,7 @@ class _Grid(FileList):
 
 class GalleryPage(QWidget):
     _vthumb_ready = Signal(str, int, object)       # vault entry id, lock generation, decrypted thumbnail bytes
+    _dups_found = Signal(object)
     title = "Gallery"
     subtitle = "Everything you made"
 
@@ -312,6 +313,9 @@ class GalleryPage(QWidget):
         self.history = app.history
         self.cur = None
         self.place = "all"
+        self.stack = None               # the stack of look-alikes being gone through
+        self._dup_busy = False
+        self._dups_found.connect(self._got_dups)
         self._open = None               # the collection whose sub-collections are folded out ("col:id" / "vcol:id")
         self.flt = {}                   # model / lora filters on top of the place
         h = QHBoxLayout(self)
@@ -331,6 +335,8 @@ class GalleryPage(QWidget):
         self.nav.customContextMenuRequested.connect(self._nav_menu)
         nv.addWidget(self.nav, 1)
         nv.addWidget(button("New collection", self._new_collection, "Ghost", "plus"))
+        nv.addWidget(button("Find duplicates", self._find_dups, "Ghost", "layers",
+                            "Stacks pictures that look the same. Nothing is deleted."))
         imp = button("Import…", self._import, "Ghost", "upload",
                      "Bring pictures and videos in from a folder or another app (or drop them onto the gallery)")
         nv.addWidget(imp)
@@ -372,6 +378,10 @@ class GalleryPage(QWidget):
         self.del_marked = button("Delete all marked", self._delete_marked, "Danger", "trash")
         bh.addWidget(self.del_marked)
         lv.addWidget(self.banner)
+        self.stack_text = label("", "Muted")
+        self.stack_bar = hrow(button("Back", self._leave_stack, "Ghost", "arrow"), self.stack_text, None, spacing=8)
+        self.stack_bar.hide()
+        lv.addWidget(self.stack_bar)
         # the vault: a bar while it is open, a lock panel while it is locked
         self.vbar = QWidget()
         self.vbar.setObjectName("VaultBar")
@@ -483,21 +493,23 @@ class GalleryPage(QWidget):
         self.b = {}
         acts = [("reuse", "Reuse", "refresh"), ("start", "Use as start", "image"), ("animate", "Animate", "video"), ("extend", "Extend", "arrow"),
                 ("upscale", "Upscale", "scale"), ("inpaint", "Edit", "edit"), ("compare", "Comparison", "gallery"),
-                ("trimcrop", "Trim and crop", "crop"), ("export", "Export…", "download"), ("copyprompt", "Copy prompt", "copy"),
+                ("trimcrop", "Trim and crop", "crop"), ("export", "Export…", "download"), ("stack", "Open stack", "layers"), ("keep", "Keep", "check"), ("copyprompt", "Copy prompt", "copy"),
                 ("folder", "Show in folder", "folder"),
                 ("move_vault", "To vault", "lock"), ("take_out", "Take out", "unlock"), ("delete", "Delete", "trash")]
         for k, t, ic in acts:
             self.b[k] = button(t, lambda k=k: self._act(k), "Ghost" if k != "reuse" else None, ic)
         acts_box = ChipBox(4)           # wraps: never cut off, whatever is shown for the picked item
-        for k in ("reuse", "start", "animate", "extend", "upscale", "inpaint", "trimcrop", "compare", "export", "copyprompt", "folder",
+        for k in ("reuse", "start", "animate", "extend", "upscale", "inpaint", "trimcrop", "compare", "stack", "keep", "export", "copyprompt", "folder",
                   "move_vault", "take_out", "delete"):
             acts_box.add(self.b[k])
         sv.addWidget(acts_box)
         self.multi = label("", "Faint")
         self.multi_join = button("Join", lambda: self.app.join_entries(self._selected()), "Ghost", "film")
         self.multi_anim = button("Animate", lambda: self.app.animate_entries(self._selected()), "Ghost", "video")
+        self.multi_side = button("Side by side", self._side_by_side, "Ghost", "gallery",
+                                 "Up to 4 pictures next to each other: zoom one and all follow")
         self.multi_export = button("Export…", lambda: self.app.export_entries(self._selected()), "Ghost", "download")
-        self.multi_row = hrow(self.multi, None, self.multi_export, self.multi_anim, self.multi_join, spacing=4)
+        self.multi_row = hrow(self.multi, None, self.multi_side, self.multi_export, self.multi_anim, self.multi_join, spacing=4)
         sv.addWidget(self.multi_row)
         self.grid.itemSelectionChanged.connect(self._sel_changed)
         h.addWidget(side)
@@ -580,7 +592,8 @@ class GalleryPage(QWidget):
         counts = {"all": len(loose), "fav": sum(1 for e in items + ventries if e.get("fav")),
                   "marked": sum(1 for e in items + ventries if e.get("marked")),
                   "image": sum(1 for e in loose if e.get("kind") == "image"),
-                  "video": sum(1 for e in loose if e.get("kind") == "video")}
+                  "video": sum(1 for e in loose if e.get("kind") == "video"),
+                  "dups": len(self._dup_groups())}
         self.nav.blockSignals(True)
         self.nav.clear()
 
@@ -596,6 +609,8 @@ class GalleryPage(QWidget):
             self.nav.addItem(it)
         head("Library")
         for key, text, ic in LIBRARY:
+            if key == "dups" and not counts[key]:
+                continue
             col = "#F5B041" if key == "fav" else ("#FF8A8A" if key == "marked" else "#A1A1AA")
             it = QListWidgetItem(icons.icon(ic, col, 16), f"{text}   {counts[key]}")
             it.setData(Qt.ItemDataRole.UserRole, key)
@@ -877,6 +892,8 @@ class GalleryPage(QWidget):
             return bool(e.get("vault")) and bool(c) and self._in_col(e, c, vault.collections)
         if p in ("fav", "marked"):
             return bool(e.get(p))
+        if p == "dups":
+            return e.get("dup") in self._dup_groups()
         if p in ("image", "video"):
             return e.get("kind") == p and not self._filed(e)
         if p.startswith("col:"):
@@ -889,6 +906,7 @@ class GalleryPage(QWidget):
             return
         self._fold(self._group(key))
         self.place = key
+        self.stack = None
         self.fill()
 
     def _new_collection(self, ids=None, parent=None):
@@ -1320,8 +1338,27 @@ class GalleryPage(QWidget):
         source = (vault.entries if vault.is_open() else []) if in_vault else self.history.items
         if self.place.startswith("store:") or self.place in ("fav", "marked"):
             source = list(self.history.items) + (list(vault.entries) if vault.is_open() else [])
-        items = [e for e in source if self._in_place(e) and _matches(e, f)]
-        items = self._sorted(items)
+        groups = self._dup_groups()
+        if self.stack not in groups:
+            self.stack = None
+        if self.stack:
+            items = self._sorted(list(groups[self.stack]))
+        else:
+            items = [e for e in source if self._in_place(e) and _matches(e, f)]
+            items = self._sorted(items)
+            if not in_vault:            # look-alikes are one pile of pictures: only the top one shows
+                seen, piled = set(), []
+                for e in items:
+                    g = e.get("dup")
+                    if g in groups:
+                        if g in seen:
+                            continue
+                        seen.add(g)
+                    piled.append(e)
+                items = piled
+        self.stack_bar.setVisible(bool(self.stack))
+        if self.stack:
+            self.stack_text.setText(f"A stack of {len(items)}: press Keep on what should stand alone, X marks for deletion.")
         keep = self.cur["id"] if self.cur else None
         self._shown = items[:5000]
         self.grid.blockSignals(True)
@@ -1330,7 +1367,8 @@ class GalleryPage(QWidget):
         self.grid.setIconSize(QSize(self.thumb, self.thumb))
         self.grid.setGridSize(QSize(self.thumb + 14, self.thumb + 14))
         for e in self._shown:
-            it = QListWidgetItem(self._icon(e), "")
+            piled = not self.stack and not in_vault and e.get("dup") in groups
+            it = QListWidgetItem(self._stack_icon(e, len(groups[e["dup"]])) if piled else self._icon(e), "")
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
             it.setToolTip((e.get("prompt") or "")[:300])
             self.grid.addItem(it)
@@ -1495,6 +1533,7 @@ class GalleryPage(QWidget):
         self.multi.setText(f"{n} selected  ·  F, X and Del work on all of them")
         self.multi_join.setVisible(vids > 1)
         self.multi_anim.setVisible(pics > 0)
+        self.multi_side.setVisible(self._side_ok(sel))
 
     def _enable(self):
         on = self.cur is not None
@@ -1506,6 +1545,10 @@ class GalleryPage(QWidget):
         img = not on or self.cur["kind"] == "image"
         inv = on and bool(self.cur.get("vault"))
         self.b["animate"].setVisible(img)
+        in_pile = on and self.cur.get("dup") in self._dup_groups()
+        self.b["stack"].setVisible(in_pile and not self.stack)
+        self.b["keep"].setVisible(in_pile and bool(self.stack))
+        self.b["keep"].setToolTip("Out of the stack: it stands alone again and won't be stacked next time")
         self.b["start"].setVisible(img)
         self.b["start"].setToolTip("A new picture from this one: the Image page with it as the start picture")
         self.b["upscale"].setVisible(img)
@@ -1557,6 +1600,15 @@ class GalleryPage(QWidget):
                     self.history.update(e["id"], marked=True)
                 self.fill()
             self.app.toasts.show_toast(f"Unmarked {len(was)}.", "info", 8000, ("Undo", again))
+
+    def _side_ok(self, sel):
+        return 2 <= len(sel) <= 4 and all(e.get("kind") == "image" and not e.get("vault") for e in sel)
+
+    def _side_by_side(self):
+        from .compare import CompareDialog
+        sel = self._selected()
+        if self._side_ok(sel):
+            CompareDialog(self, [e["file"] for e in sel]).exec()
 
     def _delete_marked(self):
         if vault.is_open() and (self._in_vault() or self.place == "marked"):
@@ -1628,12 +1680,106 @@ class GalleryPage(QWidget):
         if k == "export":
             self.app.export_entries(self._selected())
             return
+        if k == "stack":
+            self._enter_stack(self.cur.get("dup"))
+            return
+        if k == "keep":
+            self._keep(self.cur)
+            return
         if k == "take_out":
             self.app.take_out_of_vault([e for e in self._selected() if e.get("vault")])
             return
         self.app.result_action(k, self.cur, self)
 
+    def _dup_groups(self):
+        """Stack number -> its pictures (a stack of one is no stack)."""
+        out = {}
+        for e in self.history.items:
+            if e.get("dup"):
+                out.setdefault(e["dup"], []).append(e)
+        return {g: v for g, v in out.items() if len(v) > 1}
+
+    def _stack_icon(self, e, n):
+        """Its normal tile on top of two more, with how many there are."""
+        key = ("stack", e["id"], n, self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("thumb"))
+        if key not in self._icons:
+            s = self.thumb * 2
+            out = QPixmap(s, s)
+            out.fill(Qt.GlobalColor.transparent)
+            p = QPainter(out)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            top = self._icon(e).pixmap(QSize(self.thumb, self.thumb))
+            inner = int(s * 0.88)
+            step = int(s * 0.05)
+            p.setPen(QPen(QColor(T.BG), 3))
+            for i, col in ((2, T.SURFACE3), (1, T.BORDER_HI)):
+                p.setBrush(QColor(col))
+                p.drawRoundedRect(QRectF(i * step, s - inner - i * step, inner, inner), 18, 18)
+            p.drawPixmap(QRectF(0, s - inner, inner, inner), top, QRectF(top.rect()))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(T.accent())
+            r = QRectF(s - 84, s - 62, 72, 48)
+            p.drawRoundedRect(r, 24, 24)
+            f = QFont(self.font())
+            f.setPixelSize(28)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(T.on_accent())
+            p.drawText(r, Qt.AlignmentFlag.AlignCenter, str(n))
+            p.end()
+            out.setDevicePixelRatio(2.0)
+            self._icons[key] = QIcon(out)
+        return self._icons[key]
+
+    def _enter_stack(self, g):
+        self.stack = g
+        self.fill()
+
+    def _leave_stack(self):
+        self.stack = None
+        self.fill()
+
+    def _keep(self, e):
+        self.history.update(e["id"], dup=None, dup_keep=True)
+        self.fill()
+        self._fill_nav()
+
+    def _find_dups(self):
+        from . import dup
+        if self._dup_busy:
+            return
+        self._dup_busy = True
+        self.app.toast("Looking for pictures that look the same…", "info")
+        items = [e for e in self.history.items if not e.get("dup_keep")]
+
+        def work():
+            try:
+                res = dup.groups(items)
+            except Exception:
+                res = []
+            self._dups_found.emit(res)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _got_dups(self, res):
+        from . import dup
+        self._dup_busy = False
+        for e in self.history.items:
+            if e.get("dup"):
+                self.history.update(e["id"], dup=None)
+        for pile in res:
+            g = dup.new_id()
+            for e in pile:
+                self.history.update(e["id"], dup=g)
+        self.fill()
+        self._fill_nav()
+        n = len(res)
+        self.app.toast(f"{n} stack{'s' if n != 1 else ''} of look-alikes. Nothing was deleted." if n else
+                       "No look-alikes found.", "ok")
+
     def _view(self):
+        if self.cur and not self.stack and self.cur.get("dup") in self._dup_groups():
+            self._enter_stack(self.cur["dup"])
+            return
         if self.cur:
             ids = [e["id"] for e in self._shown]
             i = ids.index(self.cur["id"]) if self.cur["id"] in ids else 0

@@ -460,7 +460,8 @@ class SettingsPage(QWidget):
               ToggleRow("Ask before deleting", "Deleted results go to the recycle bin either way",
                         cfg.get("confirm_delete"), lambda v: cfg.set("confirm_delete", v)))
         c.add(hrow(button("Back up…", self._backup, "Ghost", "download"), button("Restore…", self._restore, "Ghost", "upload"),
-                   button("Shortcuts", lambda: Shortcuts(self).exec(), "Ghost", "info"), None, spacing=6))
+                   button("Shortcuts", lambda: Shortcuts(self).exec(), "Ghost", "info"),
+                   button("What's new", self._whats_new, "Ghost", "sparkle"), None, spacing=6))
         c.add(hrow(button("App data folder", lambda: system.open_folder(BASE), "Ghost", "folder"), None,
                    button("Reset settings", self._reset, "Danger"), spacing=6))
         cards.add(c)
@@ -1189,6 +1190,10 @@ class SettingsPage(QWidget):
         self.panic_edit.clear()
         self.app.global_key.clear()
         cfg.set("panic_key", "")
+
+    def _whats_new(self):
+        from .whatsnew import WhatsNew
+        WhatsNew(self).exec()
 
     def _ui_scale(self, v):
         cfg.set("ui_scale", int(v))

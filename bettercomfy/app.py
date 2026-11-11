@@ -28,11 +28,12 @@ from .settings_page import SettingsPage
 from .vault import vault
 from .video_page import VideoPage
 from .hotkey import GlobalKey
+from .storage_page import StoragePage
 from .quick import QuickSearch, Shortcuts
 from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, label
 
 GROUPS = [("Create", [("image", "Image", "image"), ("video", "Video", "video")]),
-          ("Library", [("queue", "Queue", "queue"), ("gallery", "Gallery", "gallery")]),
+          ("Library", [("queue", "Queue", "queue"), ("gallery", "Gallery", "gallery"), ("storage", "Storage", "hdd")]),
           ("Models", [("loras", "LoRAs", "lora"), ("models", "Checkpoints", "chip")]),
           ("Custom", [("characters", "Characters", "person"), ("train", "Train", "dumbbell")])]
 PAGES = [it for _g, items in GROUPS for it in items]
@@ -186,7 +187,7 @@ class Window(QMainWindow):
         mv.addWidget(self.stack, 1)
         h.addWidget(main, 1)
         self.pages = {}
-        for key, cls in (("image", ImagePage), ("video", VideoPage), ("queue", QueuePage), ("gallery", GalleryPage),
+        for key, cls in (("image", ImagePage), ("video", VideoPage), ("queue", QueuePage), ("gallery", GalleryPage), ("storage", StoragePage),
                          ("loras", LorasPage), ("models", CheckpointsPage), ("characters", CharactersPage),
                          ("train", TrainPage), ("settings", SettingsPage)):
             pg = cls(self)
@@ -218,7 +219,7 @@ class Window(QMainWindow):
         self._ht = QTimer(self, interval=30000, timeout=assistant.idle_stop)      # the helpers' memory back
         self._ht.start()
         self._views = []
-        for i, (k, _t, _i) in enumerate(PAGES + BOTTOM):
+        for i, (k, _t, _i) in enumerate((PAGES + BOTTOM)[:9]):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda k=k: self.go(k))
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.quick_search)
         QShortcut(QKeySequence("F1"), self, activated=lambda: Shortcuts(self).exec())
@@ -1667,6 +1668,9 @@ def main():
                 c.readyRead.connect(win._show)
         srv.newConnection.connect(other)
     win.show()
+    if not snap:
+        from .whatsnew import show_if_new
+        QTimer.singleShot(1200, lambda: show_if_new(win))
     win._capture_guard()                              # the whole app hidden from screen capture, if that is on
     updater.clean_up()
     if "--updated" in argv:

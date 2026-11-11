@@ -274,6 +274,7 @@ class ModelGrid(QFrame):
             it = QListWidgetItem(combo.itemText(i).split("   ")[0])
             it.setData(Qt.ItemDataRole.UserRole, i)
             it.setToolTip(combo.itemText(i).replace("   ", " "))
+            it.setSizeHint(QSize(130, 170))     # the pictures arrive a moment later
             cover, blur = None, False
             if "|" in data:
                 k = ckpts.key(*data.split("|", 1))
