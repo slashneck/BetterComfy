@@ -909,6 +909,11 @@ class _Count(QSpinBox):
         super().showEvent(e)
         self.lineEdit().setGeometry(0, 0, self.width(), self.height())
 
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        if e.type() == QEvent.Type.StyleChange:     # a new look lays it out again, with room for buttons it doesn't have
+            QTimer.singleShot(0, lambda: self.lineEdit().setGeometry(0, 0, self.width(), self.height()))
+
 
 class GenerateBar(QWidget):
     """Sticky at the bottom of the settings: how many, Generate, and what it will be / how long it takes."""

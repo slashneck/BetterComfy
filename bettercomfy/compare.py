@@ -29,7 +29,7 @@ class Canvas(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, self.zoom < 3)
         for (pm, name), c in zip(self.pics, self._cells()):
-            p.fillRect(c, QColor(T.FIELD))
+            p.fillRect(c, T.col(T.FIELD))
             p.save()
             p.setClipRect(c)
             if not pm.isNull():
@@ -39,7 +39,7 @@ class Canvas(QWidget):
                 y = c.center().y() - h / 2 + self.pan.y() * c.height()
                 p.drawPixmap(QRectF(x, y, w, h), pm, QRectF(pm.rect()))
             p.restore()
-            p.setPen(QColor(T.TEXT2))
+            p.setPen(T.col(T.TEXT2))
             p.drawText(c.adjusted(8, 6, -8, -6), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, name)
         p.end()
 

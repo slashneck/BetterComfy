@@ -59,7 +59,7 @@ class _NavDelegate(QStyledItemDelegate):
         ind = idx.data(INDENT_ROLE) or 0
         if idx.data(GROUP_ROLE):
             r = opt.rect
-            col = QColor(T.TEXT3)
+            col = T.col(T.TEXT3)
             fg = idx.data(Qt.ItemDataRole.ForegroundRole)
             if fg is not None:                  # folding in or out: the line fades with the name
                 col.setAlphaF(col.alphaF() * QColor(fg.color() if hasattr(fg, "color") else fg).alphaF())
@@ -155,7 +155,7 @@ class Nav(QListWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(QPen(T.accent(), 2))
         if where == "into":
-            fill = QColor(T.accent())
+            fill = T.col(T.accent())
             fill.setAlpha(36)
             p.setBrush(fill)
             p.drawRoundedRect(QRectF(r).adjusted(2, 1, -2, -1), 8, 8)
@@ -242,7 +242,7 @@ def _gif_mark(p, s):
     f.setPixelSize(20)
     f.setBold(True)
     p.setFont(f)
-    p.setPen(QColor("#FFFFFF"))
+    p.setPen(T.col("#FFFFFF"))
     p.drawText(QRectF(14, s - 50, 66, 36), Qt.AlignmentFlag.AlignCenter, "GIF")
     p.setPen(Qt.PenStyle.NoPen)
 
@@ -600,7 +600,7 @@ class GalleryPage(QWidget):
         def head(text):
             it = QListWidgetItem(text.upper())
             it.setFlags(Qt.ItemFlag.NoItemFlags)
-            it.setForeground(QColor(T.TEXT3))
+            it.setForeground(T.col(T.TEXT3))
             f = it.font()
             f.setPixelSize(11)
             f.setBold(True)
@@ -650,14 +650,14 @@ class GalleryPage(QWidget):
                         self.nav.setCurrentItem(it)
                 else:
                     it.setFlags(Qt.ItemFlag.NoItemFlags)
-                    it.setForeground(QColor(T.TEXT3))
+                    it.setForeground(T.col(T.TEXT3))
                     it.setToolTip("Plug it in and what is on it shows up here (vault files once the vault is open)")
                 self.nav.addItem(it)
         head("Collections")
         if not self.history.collections:
             it = QListWidgetItem("None yet")
             it.setFlags(Qt.ItemFlag.NoItemFlags)
-            it.setForeground(QColor(T.TEXT3))
+            it.setForeground(T.col(T.TEXT3))
             self.nav.addItem(it)
         self._folder_items("col:", self.history.collections, items, 0, "#A1A1AA", cur)
         self.nav.blockSignals(False)
@@ -820,7 +820,7 @@ class GalleryPage(QWidget):
     def _slide(self, items, opening, then=None):
         """The vault's collections grow out of (or shrink back into) the Vault entry, one after the other."""
         full = max(24, self.nav.visualItemRect(items[0]).height() or 32)
-        col = QColor(T.TEXT2)
+        col = T.col(T.TEXT2)
         n = len(items)
         lag = 0.35 / max(1, n)
 
@@ -1117,7 +1117,7 @@ class GalleryPage(QWidget):
             path = QPainterPath()
             path.addRoundedRect(QRectF(0, 0, s, s), 20, 20)
             p.setClipPath(path)
-            p.fillRect(out.rect(), QColor(T.SURFACE2))
+            p.fillRect(out.rect(), T.col(T.SURFACE2))
             if not pm.isNull():
                 pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
                 if e.get("marked"):
@@ -1134,7 +1134,7 @@ class GalleryPage(QWidget):
                 f.setPixelSize(22)
                 f.setBold(True)
                 p.setFont(f)
-                p.setPen(QColor("#FFFFFF"))
+                p.setPen(T.col("#FFFFFF"))
                 p.drawText(QRectF(50, s - 50, 56, 36), Qt.AlignmentFlag.AlignVCenter, f"{e.get('seconds', '')}s")
             if e.get("fav"):
                 p.setPen(Qt.PenStyle.NoPen)
@@ -1143,7 +1143,7 @@ class GalleryPage(QWidget):
                 p.drawPixmap(QPointF(s - 50, 18), icons.pixmap("starf", 32, "#F5B041", dpr=1.0))
             if e.get("marked"):
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(T.BAD))
+                p.setBrush(T.col(T.BAD))
                 p.drawEllipse(QPointF(34, 34), 22, 22)
                 p.drawPixmap(QPointF(19, 19), icons.pixmap("trash", 30, "#FFFFFF", dpr=1.0))
             if e.get("store"):
@@ -1231,7 +1231,7 @@ class GalleryPage(QWidget):
         path = QPainterPath()
         path.addRoundedRect(QRectF(0, 0, s, s), 20, 20)
         p.setClipPath(path)
-        p.fillRect(out.rect(), QColor(T.SURFACE2))
+        p.fillRect(out.rect(), T.col(T.SURFACE2))
         if not src.isNull():
             src = src.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                              Qt.TransformationMode.SmoothTransformation)
@@ -1251,7 +1251,7 @@ class GalleryPage(QWidget):
             _gif_mark(p, s)
             p.setBrush(QColor(0, 0, 0, 150))
         if e.get("marked"):
-            p.setBrush(QColor(T.BAD))
+            p.setBrush(T.col(T.BAD))
             p.drawEllipse(QPointF(34, 34), 22, 22)
             p.drawPixmap(QPointF(19, 19), icons.pixmap("trash", 30, "#FFFFFF", dpr=1.0))
             p.setBrush(QColor(0, 0, 0, 150))
@@ -1711,7 +1711,7 @@ class GalleryPage(QWidget):
             top = self._icon(e).pixmap(QSize(self.thumb, self.thumb))
             inner = int(s * 0.88)
             step = int(s * 0.05)
-            p.setPen(QPen(QColor(T.BG), 3))
+            p.setPen(QPen(T.col(T.BG), 3))
             for i, col in ((2, T.SURFACE3), (1, T.BORDER_HI)):
                 p.setBrush(QColor(col))
                 p.drawRoundedRect(QRectF(i * step, s - inner - i * step, inner, inner), 18, 18)

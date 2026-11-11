@@ -52,6 +52,8 @@ the LoRA you trained for it, its pictures through the optional Character referen
 press Start. It uses the training built into ComfyUI, so nothing extra is needed, and the result lands in your LoRA library
 and as a character. It works with SDXL, Pony, Illustrious and SD 1.5 models.
 
+**Storage.** A tab that shows what takes up space, biggest first. Delete, move or compress big pictures and videos.
+
 **A LoRA library.** Every LoRA in your ComfyUI with what it was made for (Illustrious, Pony or plain SDXL told apart
 from the training details, and settable by hand), its trigger words (suggested from the file), notes, the page you got
 it from, a favourite strength and a preview picture. Sort them with tags (character, art style, pose, detailer and your
@@ -78,7 +80,9 @@ memory, stop ComfyUI, close the app, sleep or shut down.
 
 **A gallery.** Everything you made, with its settings. Reuse them, view pictures big with zoom, join videos, animate or
 upscale from there. Pictures keep their settings inside the file, and dropping one onto ComfyUI opens its workflow.
-Favourite with F, mark with X and delete everything marked at once (favourites are never deleted), sort by date, type,
+Find duplicates compares pictures locally, without AI, and stacks the look-alikes: nothing is deleted, you go through
+a stack and keep what you want. Select 2 to 4 pictures to see them side by side with zoom that follows, or export many at
+once, with the prompt and settings taken out if you like. Favourite with F, mark with X and delete everything marked at once (favourites are never deleted), sort by date, type,
 model or LoRA, filter and search, and keep pictures in collections with sub-collections (also smart ones that fill
 themselves by model or LoRA). Videos play with their sound, a time bar and volume in the big viewer, GIFs loop at a
 speed you set and can be gone through frame by frame, and a slideshow runs through it all. Trim, crop, turn and mirror
@@ -117,6 +121,10 @@ driver) and Better Comfy's own options, and opens the right setting for each rec
 **Little things.** Your own presets, live previews while a picture is drawn, prompt history, Ctrl+Enter to generate,
 a Stop button that slides out of Generate while something is made, count arrows that double and halve,
 Ctrl+Up and Down to weight a word, `{a|b|c}` to pick one per picture, accent colours and a tray icon.
+
+**Handy.** Ctrl+K jumps to any tab, setting, model, LoRA or character, and F1 lists every shortcut. Deletes and a few other
+actions can be undone for a few seconds. A panic key hides the app and locks the vault from anywhere. Settings, Privacy has a log of
+everything the app connected to since it opened. Light mode, moving backgrounds, an interface size setting, one-zip backups.
 
 ## What you need
 

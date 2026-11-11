@@ -3,6 +3,8 @@ from PySide6.QtCore import QByteArray, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
+from .theme import fix
+
 _P = {
     "image": '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/>'
              '<path d="M4.5 18.5l5-5 4 4 2.5-2.5 4 4"/>',
@@ -97,6 +99,8 @@ def svg(name, color="#F4F4F5", width=1.8):
 
 
 def pixmap(name, size=18, color="#F4F4F5", dpr=2.0, width=1.8):
+    if isinstance(color, str):
+        color = fix(color)
     color = QColor(color).name(QColor.NameFormat.HexArgb) if not isinstance(color, str) else color
     key = (name, size, color, dpr, width)
     if key not in _cache:

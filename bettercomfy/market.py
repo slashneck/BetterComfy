@@ -371,7 +371,7 @@ class MarketView(QWidget):
         path = QPainterPath()
         path.addRoundedRect(QRectF(0, 0, s, s), 22, 22)
         p.setClipPath(path)
-        p.fillRect(out.rect(), QColor(T.SURFACE2))
+        p.fillRect(out.rect(), T.col(T.SURFACE2))
         if pm is not None and not pm.isNull():
             pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
             if key[3]:
@@ -389,7 +389,7 @@ class MarketView(QWidget):
         fam = C.made_for(self._base(m))
         pills = [(loras.FAMILY_NAMES.get(fam, self._base(m) or "?").upper()[:12], T.accent(), T.on_accent())]
         if m.get("nsfw"):
-            pills.append(("NSFW", QColor("#C0392B"), QColor("#FFFFFF")))
+            pills.append(("NSFW", T.col("#C0392B"), T.col("#FFFFFF")))
         for txt, bg, fg in pills:
             tw = p.fontMetrics().horizontalAdvance(txt) + 22
             p.setPen(Qt.PenStyle.NoPen)
@@ -692,7 +692,7 @@ class MarketView(QWidget):
         path = QPainterPath()
         path.addRoundedRect(QRectF(0, 0, s, s), 22, 22)
         p.setClipPath(path)
-        p.fillRect(out.rect(), QColor(T.SURFACE2))
+        p.fillRect(out.rect(), T.col(T.SURFACE2))
         pm = self.thumbs.get(info.get("cover")) if info.get("cover") else None
         if pm is not None and not pm.isNull():
             pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)

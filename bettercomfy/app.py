@@ -8,7 +8,7 @@ from PySide6.QtCore import QEasingCurve, QEvent, QObject, QVariantAnimation, QPo
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QImage, QKeySequence,
                            QPalette, QShortcut)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDialog, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDialog, QHBoxLayout,
                                QMainWindow, QScrollArea, QSlider, QStyleFactory, QMenu, QMessageBox,
                                QSystemTrayIcon, QVBoxLayout, QWidget)
 
@@ -27,10 +27,11 @@ from .queue_page import QueuePage
 from .settings_page import SettingsPage
 from .vault import vault
 from .video_page import VideoPage
+from .backdrop import Backdrop
 from .hotkey import GlobalKey
 from .storage_page import StoragePage
 from .quick import QuickSearch, Shortcuts
-from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, label
+from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, icon_button, label
 
 GROUPS = [("Create", [("image", "Image", "image"), ("video", "Video", "video")]),
           ("Library", [("queue", "Queue", "queue"), ("gallery", "Gallery", "gallery"), ("storage", "Storage", "hdd")]),
@@ -109,6 +110,9 @@ class TopBar(QWidget):
         ph.addWidget(self.ptext)
         ph.addWidget(self.vram)
         self.pill.mousePressEvent = lambda e: self.win.comfy_menu(self.pill.mapToGlobal(QPoint(0, self.pill.height() + 4)))
+        self.mode_btn = icon_button("sun" if T.MODE == "dark" else "moon", lambda: self.win.toggle_mode(),
+                                    "Light / dark", size=15)
+        h.addWidget(self.mode_btn)
         h.addWidget(self.pill)
         # queue
         self.qw = QWidget()
@@ -186,6 +190,9 @@ class Window(QMainWindow):
         self.stack = FadeStack()
         mv.addWidget(self.stack, 1)
         h.addWidget(main, 1)
+        self.backdrop = Backdrop(root)
+        self.backdrop.lower()
+        self.backdrop.set_kind(cfg.get("backdrop") or "none")
         self.pages = {}
         for key, cls in (("image", ImagePage), ("video", VideoPage), ("queue", QueuePage), ("gallery", GalleryPage), ("storage", StoragePage),
                          ("loras", LorasPage), ("models", CheckpointsPage), ("characters", CharactersPage),
@@ -261,6 +268,8 @@ class Window(QMainWindow):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        if hasattr(self, "backdrop"):
+            self.backdrop.setGeometry(self.centralWidget().rect())
         if hasattr(self, "toasts"):
             self.toasts.relayout()
 
@@ -1384,6 +1393,32 @@ class Window(QMainWindow):
         from .export import ExportDialog
         ExportDialog(self, entries).exec()
 
+    def toggle_mode(self):
+        """Light or dark, at once and for good."""
+        mode = "dark" if T.MODE == "light" else "light"
+        cfg.set("ui_mode", mode)
+        T.set_mode(mode)
+        app = QApplication.instance()
+        _palette(app)
+        app.setStyleSheet(T.qss())
+        T.reapply()
+        for w in app.allWidgets():
+            ic = w.property("_icon")
+            if ic and isinstance(w, QAbstractButton):
+                w.setIcon(icons.icon(ic[0], ic[1], 18))
+        self.top.mode_btn.setIcon(icons.icon("sun" if mode == "dark" else "moon", "#A1A1AA", 18))
+        self.top.mode_btn.setProperty("_icon", ["sun" if mode == "dark" else "moon", "#A1A1AA"])
+        for pg in self.pages.values():
+            if hasattr(pg, "_icons"):
+                pg._icons.clear()
+                pg.fill()
+        for w in app.allWidgets():
+            w.update()
+
+    def set_backdrop(self, kind):
+        cfg.set("backdrop", kind)
+        self.backdrop.set_kind(kind)
+
     def quick_search(self):
         QuickSearch(self).exec()
 
@@ -1577,12 +1612,12 @@ def _palette(app):
                       (QPalette.ColorRole.ToolTipText, T.TEXT), (QPalette.ColorRole.PlaceholderText, T.TEXT3),
                       (QPalette.ColorRole.Mid, T.BORDER_HI), (QPalette.ColorRole.Dark, T.PANEL),
                       (QPalette.ColorRole.Light, T.SURFACE3)):
-        pal.setColor(role, QColor(col))
+        pal.setColor(role, T.col(col))
     pal.setColor(QPalette.ColorRole.Highlight, T.accent())
     pal.setColor(QPalette.ColorRole.HighlightedText, T.on_accent())
-    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(T.TEXT3))
-    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(T.TEXT3))
-    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(T.TEXT3))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, T.col(T.TEXT3))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, T.col(T.TEXT3))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, T.col(T.TEXT3))
     app.setPalette(pal)
 
 
@@ -1653,6 +1688,7 @@ def main():
     if srv is None and not snap:
         return 0
     T.set_accent(cfg.get("accent"))
+    T.set_mode(cfg.get("ui_mode"))
     _palette(app)
     _fonts(app)
     app.setStyleSheet(T.qss())

@@ -26,7 +26,7 @@ def _thumb(path, size=64):
     path_ = QPainterPath()
     path_.addRoundedRect(QRectF(0, 0, size * 2, size * 2), 18, 18)
     p.setClipPath(path_)
-    p.fillRect(out.rect(), QColor(T.SURFACE3))
+    p.fillRect(out.rect(), T.col(T.SURFACE3))
     if not pm.isNull():
         pm = pm.scaled(size * 2, size * 2, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                        Qt.TransformationMode.SmoothTransformation)

@@ -531,13 +531,13 @@ class Viewer(QWidget):
         f.setPixelSize(14)
         f.setWeight(QFont.Weight.DemiBold)
         p.setFont(f)
-        p.setPen(QColor(T.TEXT))
+        p.setPen(T.col(T.TEXT))
         if e:
             p.drawText(QRectF(24, 18, self.width() - 140, 24), Qt.AlignmentFlag.AlignVCenter, (e.get("name") or "Private") if e.get("vault") else nice_name(e["file"]))
             f.setPixelSize(12)
             f.setWeight(QFont.Weight.Normal)
             p.setFont(f)
-            p.setPen(QColor(T.TEXT2))
+            p.setPen(T.col(T.TEXT2))
             zoom = f"{self.scale * 100:.0f} %"
             info = f"{self.idx + 1} / {len(self.entries)}    {e.get('w')} × {e.get('h')}    {zoom}"
             fm = QFontMetrics(f)
@@ -548,7 +548,7 @@ class Viewer(QWidget):
                 hint += "   ·   Space: pause   ·   , .: frame"
             if self.slides.isActive():
                 hint = "Slideshow   ·   S: stop   ·   " + hint
-            p.setPen(QColor(T.TEXT3))
+            p.setPen(T.col(T.TEXT3))
             p.drawText(QRectF(0, self.height() - 34, self.width(), 20), Qt.AlignmentFlag.AlignCenter, hint)
         # favourite / marked
         if e:
@@ -557,8 +557,8 @@ class Viewer(QWidget):
             f2.setPixelSize(12)
             f2.setWeight(QFont.Weight.DemiBold)
             p.setFont(f2)
-            for on, text, col in ((e.get("fav"), "★  Favourite", QColor("#F5B041")),
-                                  (e.get("marked"), "Marked for deletion", QColor(T.BAD))):
+            for on, text, col in ((e.get("fav"), "★  Favourite", T.col("#F5B041")),
+                                  (e.get("marked"), "Marked for deletion", T.col(T.BAD))):
                 if not on:
                     continue
                 w = QFontMetrics(f2).horizontalAdvance(text) + 22

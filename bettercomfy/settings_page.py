@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QKeySequence
 
 from . import comfy, icons, system, theme as T
 from .config import APP_NAME, BASE, VERSION, cfg, resource
+from .backdrop import KINDS
 from .queue_page import AFTER
 from .quick import ConnectionLog, Shortcuts
 from .widgets import (ChipBox, Combo, Card, Scroll, Segmented, Slider, ToggleRow, button, chip, field, hrow, label,
@@ -417,6 +418,13 @@ class SettingsPage(QWidget):
         sh.addWidget(custom)
         sh.addStretch(1)
         c.add(field("Accent", sw, label_w=90))
+        self.backdrop = Combo()
+        for k, t in KINDS:
+            self.backdrop.addItem(t, k)
+        set_combo(self.backdrop, cfg.get("backdrop") or "none")
+        self.backdrop.currentIndexChanged.connect(lambda _i: self.app.set_backdrop(self.backdrop.currentData()))
+        c.add(field("Background", self.backdrop, "A faint moving background behind the pages. It stops when another "
+                                                 "program is in front. Needs Animations on.", label_w=90))
         self.ui_scale = Slider(80, 150, 5, 0, float(cfg.get("ui_scale") or 100), self._ui_scale, suffix=" %", width=80)
         scale_chips = ChipBox(4)
         for text, v in (("Small", 90), ("Default", 100), ("Large", 115), ("Extra large", 130)):

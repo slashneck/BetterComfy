@@ -40,6 +40,7 @@ def button(text="", on_click=None, kind=None, icon=None, tip=None, checkable=Fal
         col = icon_color or (T.on_accent().name() if kind == "Accent" else ("#A1A1AA" if kind == "Ghost" else "#D4D4D8"))
         b.setIcon(icons.icon(icon, col, 18))
         b.setIconSize(icons.size(size or (16 if text else 18)))
+        b.setProperty("_icon", [icon, col])     # drawn again when the mode changes
     if tip:
         b.setToolTip(tip)
     b.setCheckable(checkable)
@@ -300,17 +301,17 @@ class Toggle(QAbstractButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        off = QColor(T.SURFACE3 if not self._hover else "#2C2C31")
-        on = T.accent() if self.isEnabled() else QColor(T.TEXT3)
-        p.setPen(QPen(QColor(T.BORDER_HI), 1) if self._k < 0.5 else Qt.PenStyle.NoPen)
+        off = T.col(T.SURFACE3 if not self._hover else "#2C2C31")
+        on = T.accent() if self.isEnabled() else T.col(T.TEXT3)
+        p.setPen(QPen(T.col(T.BORDER_HI), 1) if self._k < 0.5 else Qt.PenStyle.NoPen)
         p.setBrush(T.mix(off, on, self._k))
         p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
         d = r.height() - 6
         x = r.x() + 3 + (r.width() - d - 6) * self._k
         p.setPen(Qt.PenStyle.NoPen)
-        knob = T.mix(QColor("#BDBDC4"), T.on_accent() if T.on_accent().lightness() > 128 else QColor("#FFFFFF"), self._k)
+        knob = T.mix(T.col("#BDBDC4"), T.on_accent() if T.on_accent().lightness() > 128 else T.col("#FFFFFF"), self._k)
         if not self.isEnabled():
-            knob = QColor("#55555C")
+            knob = T.col("#55555C")
         p.setBrush(knob)
         p.drawEllipse(QRectF(x, r.y() + 3, d, d))
         p.end()
@@ -463,25 +464,25 @@ class Segmented(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setPen(QPen(QColor(T.BORDER_HI), 1))
-        p.setBrush(QColor(T.FIELD))
+        p.setPen(QPen(T.col(T.BORDER_HI), 1))
+        p.setBrush(T.col(T.FIELD))
         p.drawRoundedRect(r, 10, 10)
         if self._hl is None and self.opts:
             self._hl = self._rect(self.idx)
         if 0 <= self.hover < len(self.opts) and self.hover != self.idx:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(T.SURFACE2))
+            p.setBrush(T.col(T.SURFACE2))
             p.drawRoundedRect(self._rect(self.hover), 7, 7)
         if self._hl is not None:
-            p.setPen(QPen(T.mix(T.accent(), QColor(T.SURFACE3), 0.55), 1))
-            p.setBrush(T.mix(QColor(T.SURFACE3), T.accent(), 0.16))
+            p.setPen(QPen(T.mix(T.accent(), T.col(T.SURFACE3), 0.55), 1))
+            p.setBrush(T.mix(T.col(T.SURFACE3), T.accent(), 0.16))
             p.drawRoundedRect(self._hl, 7, 7)
         for i, o in enumerate(self.opts):
             rr = self._rect(i)
             sel = i == self.idx
-            col = QColor(T.TEXT if sel else T.TEXT2)
+            col = T.col(T.TEXT if sel else T.TEXT2)
             if not self.isEnabled():
-                col = QColor(T.TEXT3)
+                col = T.col(T.TEXT3)
             f = QFont(self.font())
             if sel:
                 f.setWeight(QFont.Weight.DemiBold)
@@ -586,11 +587,11 @@ class PresetPicker(QWidget):
         acc = T.accent()
         # track
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(T.SURFACE3))
+        p.setBrush(T.col(T.SURFACE3))
         p.drawRoundedRect(QRectF(x0, y - 2, x1 - x0, 4), 2, 2)
         xt = x0 + (x1 - x0) * (self._x / max(1, n - 1))
         grad = QLinearGradient(x0, 0, max(x0 + 1, xt), 0)
-        grad.setColorAt(0, T.mix(acc, QColor(T.SURFACE3), 0.65))
+        grad.setColorAt(0, T.mix(acc, T.col(T.SURFACE3), 0.65))
         grad.setColorAt(1, acc)
         p.setBrush(QBrush(grad))
         p.drawRoundedRect(QRectF(x0, y - 2, xt - x0, 4), 2, 2)
@@ -598,7 +599,7 @@ class PresetPicker(QWidget):
         for i in range(n):
             sx = self._stop_x(i)
             passed = i <= self._x + 0.01
-            p.setBrush(acc if passed else QColor("#3A3A40"))
+            p.setBrush(acc if passed else T.col("#3A3A40"))
             r = 4 if i != self.hover else 5
             p.drawEllipse(QPointF(sx, y), r, r)
         # thumb
@@ -606,7 +607,7 @@ class PresetPicker(QWidget):
         glow.setAlpha(60)
         p.setBrush(glow)
         p.drawEllipse(QPointF(xt, y), 12, 12)
-        p.setBrush(QColor("#FFFFFF"))
+        p.setBrush(T.col("#FFFFFF"))
         p.drawEllipse(QPointF(xt, y), 7.5, 7.5)
         p.setBrush(acc)
         p.drawEllipse(QPointF(xt, y), 3, 3)
@@ -618,7 +619,7 @@ class PresetPicker(QWidget):
             sel = i == self.idx
             f.setWeight(QFont.Weight.DemiBold if sel else QFont.Weight.Normal)
             p.setFont(f)
-            p.setPen(QColor(T.TEXT if sel else (T.TEXT2 if i == self.hover else T.TEXT3)))
+            p.setPen(T.col(T.TEXT if sel else (T.TEXT2 if i == self.hover else T.TEXT3)))
             fm = QFontMetrics(f)
             tw = fm.horizontalAdvance(pr[1])
             lx = max(0, min(self.width() - tw, sx - tw / 2))
@@ -864,8 +865,8 @@ class AspectPreview(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        p.setPen(QPen(QColor(T.BORDER), 1))
-        p.setBrush(QColor(T.FIELD))
+        p.setPen(QPen(T.col(T.BORDER), 1))
+        p.setBrush(T.col(T.FIELD))
         p.drawRoundedRect(r, 12, 12)
         area = QRectF(r.x() + 14, r.y() + 12, r.width() * 0.46, r.height() - 24)
         big = max(self.fw, self.fh, self.base) * 1.0
@@ -873,14 +874,14 @@ class AspectPreview(QWidget):
         cx, cy = area.center().x(), area.center().y()
         # native square
         bs = self.base * s
-        pen = QPen(QColor("#3A3A40"), 1, Qt.PenStyle.DashLine)
+        pen = QPen(T.col("#3A3A40"), 1, Qt.PenStyle.DashLine)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(QRectF(cx - bs / 2, cy - bs / 2, bs, bs), 3, 3)
         acc = T.accent()
         if (self.fw, self.fh) != (self.w, self.h):
             fw, fh = self.fw * s, self.fh * s
-            p.setPen(QPen(T.mix(acc, QColor(T.FIELD), 0.45), 1, Qt.PenStyle.DashLine))
+            p.setPen(QPen(T.mix(acc, T.col(T.FIELD), 0.45), 1, Qt.PenStyle.DashLine))
             p.drawRoundedRect(QRectF(cx - fw / 2, cy - fh / 2, fw, fh), 4, 4)
         gw, gh = self.w * s, self.h * s
         fill = QColor(acc)
@@ -894,19 +895,19 @@ class AspectPreview(QWidget):
         f.setPixelSize(19)
         f.setWeight(QFont.Weight.DemiBold)
         p.setFont(f)
-        p.setPen(QColor(T.TEXT))
+        p.setPen(T.col(T.TEXT))
         y = r.y() + r.height() / 2 - 22
         p.drawText(QPointF(tx, y), f"{self.w} × {self.h}")
         f.setPixelSize(12)
         f.setWeight(QFont.Weight.Normal)
         p.setFont(f)
-        p.setPen(QColor(T.TEXT2))
+        p.setPen(T.col(T.TEXT2))
         p.drawText(QPointF(tx, y + 22), f"{self.w * self.h / 1e6:.2f} MP  ·  {self._ratio()}")
         if (self.fw, self.fh) != (self.w, self.h):
             p.setPen(acc)
             p.drawText(QPointF(tx, y + 42), f"→ {self.fw} × {self.fh} final")
         if self.note:
-            p.setPen(QColor(T.TEXT3))
+            p.setPen(T.col(T.TEXT3))
             p.drawText(QPointF(tx, y + (62 if (self.fw, self.fh) != (self.w, self.h) else 42)), self.note)
         p.end()
 
@@ -948,7 +949,7 @@ class ImageDrop(QFrame):
                 self.pm.loadFromData(ref_bytes(path))
             except Exception:
                 self.pm = QPixmap(240, 160)
-                self.pm.fill(QColor(T.SURFACE3))
+                self.pm.fill(T.col(T.SURFACE3))
             self.clear_btn.setVisible(True)
             self.setToolTip("A private picture (vault)")
             self.update()
@@ -1015,7 +1016,7 @@ class ImageDrop(QFrame):
         acc = T.accent()
         if self.pm is not None:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(T.FIELD))
+            p.setBrush(T.col(T.FIELD))
             p.drawRoundedRect(r, 12, 12)
             inner = r.adjusted(6, 6, -6, -6)
             s = min(inner.width() / self.pm.width(), inner.height() / self.pm.height())
@@ -1039,17 +1040,17 @@ class ImageDrop(QFrame):
             p.setBrush(QColor(0, 0, 0, 170))
             br = QRectF(r.x() + 10, r.bottom() - 30, bw, 20)
             p.drawRoundedRect(br, 6, 6)
-            p.setPen(QColor(T.TEXT))
+            p.setPen(T.col(T.TEXT))
             p.drawText(br, Qt.AlignmentFlag.AlignCenter, txt)
         else:
-            p.setPen(QPen(acc if self._drag else QColor("#3A3A40" if self._hover else "#2A2A2F"), 1.3, Qt.PenStyle.DashLine))
+            p.setPen(QPen(acc if self._drag else T.col("#3A3A40" if self._hover else "#2A2A2F"), 1.3, Qt.PenStyle.DashLine))
             bg = QColor(acc)
             bg.setAlpha(18) if self._drag else bg.setAlpha(0)
-            p.setBrush(bg if self._drag else QColor(T.FIELD))
+            p.setBrush(bg if self._drag else T.col(T.FIELD))
             p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
             pm = icons.pixmap("upload", 26, acc.name() if (self._drag or self._hover) else "#6B6B73")
             p.drawPixmap(QPointF(r.center().x() - 13, r.center().y() - 30), pm)
-            p.setPen(QColor(T.TEXT2 if self._hover else T.TEXT3))
+            p.setPen(T.col(T.TEXT2 if self._hover else T.TEXT3))
             p.drawText(r.adjusted(16, 30, -16, 0), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter |
                        Qt.TextFlag.TextWordWrap, self.text)
         p.end()
@@ -1158,7 +1159,7 @@ class Player(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        p.fillRect(self.rect(), QColor(T.BG))
+        p.fillRect(self.rect(), T.col(T.BG))
         if self.frames:
             pm = self.frames[self.i % len(self.frames)]
             tr = self.image_rect()
@@ -1189,12 +1190,12 @@ class Player(QWidget):
             f.setPixelSize(15)
             f.setWeight(QFont.Weight.DemiBold)
             p.setFont(f)
-            p.setPen(QColor(T.TEXT2))
+            p.setPen(T.col(T.TEXT2))
             p.drawText(QRectF(40, c.y() + 18, self.width() - 80, 24), Qt.AlignmentFlag.AlignCenter, self.title)
             f.setPixelSize(12)
             f.setWeight(QFont.Weight.Normal)
             p.setFont(f)
-            p.setPen(QColor(T.TEXT3))
+            p.setPen(T.col(T.TEXT3))
             p.drawText(QRectF(60, c.y() + 44, self.width() - 120, 60),
                        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, self.sub)
         if self.badge:
@@ -1209,18 +1210,18 @@ class Player(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(0, 0, 0, 160))
             p.drawRoundedRect(br, 7, 7)
-            p.setPen(QColor("#E4E4E7"))
+            p.setPen(T.col("#E4E4E7"))
             p.drawText(br, Qt.AlignmentFlag.AlignCenter, self.badge)
         if self.prog is not None:
             w = self.width() - 36
             y = self.height() - 14
             acc = T.accent()
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(T.SURFACE3))
+            p.setBrush(T.col(T.SURFACE3))
             p.drawRoundedRect(QRectF(18, y, w, 3), 1.5, 1.5)
             fw = max(3.0, w * max(0.0, min(1.0, self.prog)))
             grad = QLinearGradient(18, 0, 18 + fw, 0)
-            grad.setColorAt(0, T.mix(acc, QColor(T.BG), 0.4))
+            grad.setColorAt(0, T.mix(acc, T.col(T.BG), 0.4))
             grad.setColorAt(1, acc)
             p.setBrush(QBrush(grad))
             p.drawRoundedRect(QRectF(18, y, fw, 3), 1.5, 1.5)
@@ -1241,7 +1242,7 @@ class Player(QWidget):
                 br = QRectF(18, y - 32, tw, 24)
                 p.setBrush(QColor(0, 0, 0, 170))
                 p.drawRoundedRect(br, 8, 8)
-                p.setPen(QColor(T.TEXT))
+                p.setPen(T.col(T.TEXT))
                 p.drawText(br, Qt.AlignmentFlag.AlignCenter, t)
         p.end()
 
@@ -1300,7 +1301,7 @@ class Filmstrip(FileList):
             pm = QPixmap(key)
             if pm.isNull():
                 pm = QPixmap(self.icon, self.icon)
-                pm.fill(QColor(T.SURFACE2))
+                pm.fill(T.col(T.SURFACE2))
             pm = pm.scaled(self.icon * 2, self.icon * 2, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                            Qt.TransformationMode.SmoothTransformation)
             sq = QPixmap(self.icon * 2, self.icon * 2)
@@ -1357,7 +1358,7 @@ class PulseDot(QWidget):
     def __init__(self, size=10):
         super().__init__()
         self.setFixedSize(size + 8, size + 8)
-        self.col = QColor(T.TEXT3)
+        self.col = T.col(T.TEXT3)
         self.pulse = False
         self._t = 0.0
         self._timer = QTimer(self, interval=40, timeout=self._tick)
@@ -1425,7 +1426,7 @@ class Ring(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(3, 3, -3, -3)
-        p.setPen(QPen(QColor(T.SURFACE3), 3))
+        p.setPen(QPen(T.col(T.SURFACE3), 3))
         p.drawEllipse(r)
         if self.n:
             pen = QPen(T.accent(), 3)
@@ -1439,7 +1440,7 @@ class Ring(QWidget):
             f.setPixelSize(11)
             f.setWeight(QFont.Weight.Bold)
             p.setFont(f)
-            p.setPen(QColor(T.TEXT))
+            p.setPen(T.col(T.TEXT))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, str(self.n))
         else:
             p.drawPixmap(QPointF(self.width() / 2 - 7, self.height() / 2 - 7), icons.pixmap("check", 14, "#62626B"))
@@ -1551,7 +1552,7 @@ class _Swap(QWidget):
 
     def paintEvent(self, _):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(T.BG))
+        p.fillRect(self.rect(), T.col(T.BG))
         t = self.t
         out = min(1.0, t * 1.6)                    # the old page is gone a bit before the new one settles
         if out < 1.0:
@@ -1661,12 +1662,12 @@ class NavButton(QAbstractButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         on = self.isChecked()
         if self._h > 0 and not on:
-            c = QColor(T.SURFACE2)
+            c = T.col(T.SURFACE2)
             c.setAlphaF(self._h)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(c)
             p.drawRoundedRect(QRectF(8, 4, self.width() - 16, self.height() - 8), 12, 12)
-        col = QColor(T.TEXT) if on else T.mix(QColor("#7A7A83"), QColor(T.TEXT), self._h * 0.7)
+        col = T.col(T.TEXT) if on else T.mix(T.col("#7A7A83"), T.col(T.TEXT), self._h * 0.7)
         ic = icons.pixmap(self.icon_name, 21, T.accent().name() if on else col.name())
         p.drawPixmap(QPointF(self.width() / 2 - 10.5, 10), ic)
         f = QFont(self.font())
@@ -1700,7 +1701,7 @@ class NavHeader(QAbstractButton):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        col = QColor("#8A8A93" if self._hover else "#55555D")
+        col = T.col("#8A8A93" if self._hover else "#55555D")
         f = QFont(self.font())
         f.setPixelSize(9)
         f.setWeight(QFont.Weight.Bold)
@@ -1830,7 +1831,7 @@ class NavRail(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
-        bg = T.mix(QColor(T.SURFACE2), T.accent(), 0.10)
+        bg = T.mix(T.col(T.SURFACE2), T.accent(), 0.10)
         p.setBrush(bg)
         p.drawRoundedRect(QRectF(12, self._y - 26, self.width() - 24, 52), 12, 12)
         p.setBrush(T.accent())

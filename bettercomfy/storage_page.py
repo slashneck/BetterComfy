@@ -129,6 +129,7 @@ class StoragePage(QWidget):
         self.show_what = Combo()
         for t, k in (("Pictures and videos", ""), ("Pictures", "image"), ("Videos", "video")):
             self.show_what.addItem(t, k)
+        self.show_what.setMinimumWidth(190)
         self.show_what.currentIndexChanged.connect(lambda _i: self.fill())
         self.sel_text = label("", "Muted")
         self.del_btn = button("Delete", self._delete, "Ghost", "trash", icon_color="#FF8A8A")

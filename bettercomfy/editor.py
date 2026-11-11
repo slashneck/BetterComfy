@@ -191,9 +191,9 @@ class CropView(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        p.fillRect(self.rect(), QColor(T.SURFACE))
+        p.fillRect(self.rect(), T.col(T.SURFACE))
         if self.pm.isNull():
-            p.setPen(QColor(T.TEXT3))
+            p.setPen(T.col(T.TEXT3))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Loading…")
             return
         ir = self._img_rect()
@@ -214,7 +214,7 @@ class CropView(QWidget):
             p.drawLine(QPointF(x, cr.top()), QPointF(x, cr.bottom()))
             p.drawLine(QPointF(cr.left(), y), QPointF(cr.right(), y))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(T.accent()))
+        p.setBrush(T.col(T.accent()))
         for pt in (cr.topLeft(), cr.topRight(), cr.bottomLeft(), cr.bottomRight()):
             p.drawEllipse(pt, 5, 5)
 

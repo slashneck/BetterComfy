@@ -30,6 +30,7 @@ class History(QObject):
         self.items = []
         self.offline = []               # on a drive that is not plugged in: kept, not shown
         self._by_id = {}
+        self._was_at = {}               # where something taken out for a moment was (Undo)
         self.collections = []           # [{"id", "name", "smart": None | {filters}}]
         self._load()
         self._load_cols()
@@ -155,6 +156,7 @@ class History(QObject):
         back and a killed app loses nothing."""
         ids = set(ids)
         with self._lock:
+            self._was_at.update({e["id"]: n for n, e in enumerate(self.items) if e.get("id") in ids})
             self.items = [e for e in self.items if e.get("id") not in ids]
             for i in ids:
                 self._by_id.pop(i, None)
@@ -167,9 +169,10 @@ class History(QObject):
 
     def put_back(self, entries):
         with self._lock:
-            for e in entries:
+            # each back where it was (many results can share the same second)
+            for e in sorted(entries, key=lambda e: self._was_at.get(e["id"], len(self.items))):
                 self._by_id[e["id"]] = e
-            self.items = sorted(self.items + list(entries), key=lambda e: e.get("created", ""))
+                self.items.insert(min(self._was_at.pop(e["id"], len(self.items)), len(self.items)), e)
             self._rewrite()
         self.restored.emit()
 

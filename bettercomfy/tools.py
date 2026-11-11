@@ -146,7 +146,7 @@ class MaskCanvas(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(T.BG))
+        p.fillRect(self.rect(), T.col(T.BG))
         rr, s = self._fit()
         p.drawImage(rr, self.img)
         p.setOpacity(0.55)
@@ -159,7 +159,7 @@ class MaskCanvas(QWidget):
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.setPen(QPen(QColor(0, 0, 0, 160), 3))
             p.drawEllipse(self.cur, r, r)
-            p.setPen(QPen(QColor("#FFFFFF") if not (self.erase or self._erasing) else QColor(T.BAD), 1.4))
+            p.setPen(QPen(T.col("#FFFFFF") if not (self.erase or self._erasing) else T.col(T.BAD), 1.4))
             p.drawEllipse(self.cur, r, r)
         p.end()
 

@@ -319,7 +319,7 @@ class LorasPage(QWidget):
             path = QPainterPath()
             path.addRoundedRect(QRectF(0, 0, s, s), 22, 22)
             p.setClipPath(path)
-            p.fillRect(out.rect(), QColor(T.SURFACE2))
+            p.fillRect(out.rect(), T.col(T.SURFACE2))
             pm = QPixmap(prev) if prev else QPixmap()
             if not pm.isNull():
                 pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
@@ -337,9 +337,9 @@ class LorasPage(QWidget):
                 txt = "HIGH" if half == "high" else "LOW"
                 tw = p.fontMetrics().horizontalAdvance(txt) + 28
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(T.accent() if half == "high" else QColor("#3B6FD9"))
+                p.setBrush(T.accent() if half == "high" else T.col("#3B6FD9"))
                 p.drawRoundedRect(QRectF(14, 14, tw, 40), 12, 12)
-                p.setPen(T.on_accent() if half == "high" else QColor("#FFFFFF"))
+                p.setPen(T.on_accent() if half == "high" else T.col("#FFFFFF"))
                 p.drawText(QRectF(14, 14, tw, 40), Qt.AlignmentFlag.AlignCenter, txt)
             if loras.notes(n).get("favorite"):
                 p.drawPixmap(s - 52, 14, icons.pixmap("starf", 36, "#F5B041", dpr=1.0))
@@ -358,9 +358,9 @@ class LorasPage(QWidget):
                         break
                     nsfw = t.lower() == "nsfw"
                     p.setPen(Qt.PenStyle.NoPen)
-                    p.setBrush(QColor("#C0392B") if nsfw else QColor(0, 0, 0, 170))
+                    p.setBrush(T.col("#C0392B") if nsfw else QColor(0, 0, 0, 170))
                     p.drawRoundedRect(QRectF(x, y, tw, 34), 10, 10)
-                    p.setPen(QColor("#FFFFFF"))
+                    p.setPen(T.col("#FFFFFF"))
                     p.drawText(QRectF(x, y, tw, 34), Qt.AlignmentFlag.AlignCenter, txt)
                     x += tw + 6
             p.end()

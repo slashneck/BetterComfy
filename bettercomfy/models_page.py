@@ -327,7 +327,7 @@ class CheckpointsPage(QWidget):
         path = QPainterPath()
         path.addRoundedRect(QRectF(0, 0, s, s), 22, 22)
         p.setClipPath(path)
-        p.fillRect(out.rect(), QColor(T.SURFACE2))
+        p.fillRect(out.rect(), T.col(T.SURFACE2))
         pm = QPixmap(prev) if prev else QPixmap()
         if not pm.isNull():
             pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
@@ -343,8 +343,8 @@ class CheckpointsPage(QWidget):
         p.setFont(f)
         x = 14
         for txt, bg, fg in ((loras.FAMILY_NAMES.get(fam, fam).upper(), T.accent(), T.on_accent()),
-                            ("CKPT" if src == "ckpt" else "DIFFUSION", QColor("#3B6FD9") if src == "unet"
-                             else QColor(0, 0, 0, 170), QColor("#FFFFFF"))):
+                            ("CKPT" if src == "ckpt" else "DIFFUSION", T.col("#3B6FD9") if src == "unet"
+                             else QColor(0, 0, 0, 170), T.col("#FFFFFF"))):
             tw = p.fontMetrics().horizontalAdvance(txt) + 22
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(bg)
@@ -361,9 +361,9 @@ class CheckpointsPage(QWidget):
             if x + tw > s - 10:
                 break
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#C0392B") if t.lower() == "nsfw" else QColor(0, 0, 0, 170))
+            p.setBrush(T.col("#C0392B") if t.lower() == "nsfw" else QColor(0, 0, 0, 170))
             p.drawRoundedRect(QRectF(x, y, tw, 34), 10, 10)
-            p.setPen(QColor("#FFFFFF"))
+            p.setPen(T.col("#FFFFFF"))
             p.drawText(QRectF(x, y, tw, 34), Qt.AlignmentFlag.AlignCenter, txt)
             x += tw + 6
         p.end()

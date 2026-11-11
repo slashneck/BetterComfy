@@ -27,7 +27,7 @@ def tile(path, s=300, placeholder="person", blur=False):
     clip = QPainterPath()
     clip.addRoundedRect(QRectF(0, 0, s, s), s * 0.07, s * 0.07)
     p.setClipPath(clip)
-    p.fillRect(out.rect(), QColor(T.SURFACE2))
+    p.fillRect(out.rect(), T.col(T.SURFACE2))
     pm = QPixmap(path) if path else QPixmap()
     if not pm.isNull():
         pm = pm.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)

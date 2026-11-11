@@ -2,7 +2,6 @@
 Under another program, or a game, they stop completely."""
 import math
 import random
-import time
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
@@ -152,5 +151,3 @@ class Backdrop(QWidget):
             p.drawText(QRectF(r["x"], r["y"] - 14, 340, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                        r["text"][:r["n"]])
 
-
-_ = time                                # (kept for a steady import order)

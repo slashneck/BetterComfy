@@ -1,5 +1,8 @@
 """Colours and the stylesheet. Black and white, one accent colour (changeable in Settings)."""
+import re
+
 from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QApplication, QWidget
 
 from .config import resource
 
@@ -33,9 +36,62 @@ BAD = "#EF4444"
 
 _accent = QColor("#8B7CF6")
 
+# Light mode: the names above always hold the dark colours. Everything that shows a colour asks fix() or col(), which
+# give the light one in light mode: these first, any other grey by turning it around, real colours as they are.
+MODE = "dark"
+_LIGHT = {BG: "#F3F3F6", PANEL: "#FAFAFB", SURFACE: "#FFFFFF", SURFACE2: "#F1F1F4", SURFACE3: "#E4E4EA", FIELD: "#FFFFFF",
+          BORDER_HI: "#CFCFD8", TEXT: "#18181B", TEXT2: "#52525B", TEXT3: "#8A8A93"}
+_KEEP = {"#000000", "#FFFFFF", "#0A0A0B"}       # on pictures and on the accent colour
+_HEX = re.compile(r"#[0-9A-Fa-f]{6}\b")
+
+
+def _flip(m):
+    h = m.group(0).upper()
+    if h in _KEEP:
+        return h
+    if h in _LIGHT:
+        return _LIGHT[h]
+    r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+    if max(r, g, b) - min(r, g, b) > 20:
+        return h
+    return f"#{255 - r:02X}{255 - g:02X}{255 - b:02X}"
+
+
+def fix(text):
+    """A colour, or a whole style sheet, as it should look in the current mode."""
+    return _HEX.sub(_flip, text) if MODE == "light" else text
+
+
+def col(c):
+    return QColor(fix(c))
+
+
+def set_mode(mode):
+    global MODE
+    MODE = "light" if mode == "light" else "dark"
+
+
+_raw_style = QWidget.setStyleSheet
+
+
+def _styled(self, text):
+    self.setProperty("_style", text)            # remembered: a change of mode applies it again
+    _raw_style(self, fix(text))
+
+
+QWidget.setStyleSheet = _styled
+
+
+def reapply():
+    """After a change of mode: the style of every widget that has its own."""
+    for w in QApplication.allWidgets():
+        s = w.property("_style")
+        if isinstance(s, str):
+            _raw_style(w, fix(s))
+
 
 def accent():
-    return QColor(_accent)
+    return col(_accent.name())
 
 
 def set_accent(hex_):
@@ -47,7 +103,7 @@ def set_accent(hex_):
 
 def on_accent(c=None):
     """Black or white text, whichever reads better on the accent."""
-    c = QColor(c or _accent)
+    c = QColor(c or accent())
     lum = 0.2126 * c.redF() ** 2.2 + 0.7152 * c.greenF() ** 2.2 + 0.0722 * c.blueF() ** 2.2
     return QColor("#0A0A0B") if lum > 0.28 else QColor("#FFFFFF")
 
@@ -59,11 +115,15 @@ def mix(a, b, t):
 
 
 def rgba(c, alpha):
-    c = QColor(c)
+    c = col(c) if isinstance(c, str) else QColor(c)
     return f"rgba({c.red()},{c.green()},{c.blue()},{alpha})"
 
 
 def qss():
+    return fix(_qss())
+
+
+def _qss():
     a = _accent.name()
     a_hi = mix(_accent, "#FFFFFF", 0.18).name()
     a_lo = mix(_accent, "#000000", 0.15).name()
@@ -76,7 +136,7 @@ QMainWindow, #Root {{ background: {BG}; }}
 QDialog {{ background: {PANEL}; }}
 QToolTip {{ background: {SURFACE2}; color: {TEXT}; border: 1px solid {BORDER_HI}; padding: 6px 9px; border-radius: 6px; }}
 
-#Main {{ background: {BG}; }}
+#Main {{ background: transparent; }}
 #Card {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 14px; }}
 #Card[flat="true"] {{ background: transparent; border: none; }}
 #Panel {{ background: {PANEL}; border-left: 1px solid {BORDER}; }}
@@ -165,6 +225,9 @@ QMenu::separator {{ height: 1px; background: {BORDER_HI}; margin: 5px 8px; }}
 QMenu::icon {{ padding-left: 8px; }}
 
 QListWidget, QListView, QTreeView {{ background: transparent; border: none; }}
+QHeaderView {{ background: transparent; }}
+QHeaderView::section {{ background: transparent; color: {TEXT3}; border: none; border-bottom: 1px solid {BORDER}; padding: 5px 6px; font-size: 12px; }}
+QTreeView::item {{ padding: 3px 2px; }}
 QListWidget::item, QListView::item {{ border-radius: 10px; color: {TEXT2}; }}
 QListWidget::item:hover, QListView::item:hover {{ background: {SURFACE2}; }}
 QListWidget::item:selected, QListView::item:selected {{ background: {SURFACE3}; color: {TEXT}; }}

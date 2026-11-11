@@ -471,17 +471,17 @@ class _Row(QStyledItemDelegate):
         r = opt.rect
         if opt.state & QStyle.StateFlag.State_Selected:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(T.rgba(T.accent(), 60)))
+            p.setBrush(T.col(T.rgba(T.accent(), 60)))
             p.drawRoundedRect(r.adjusted(2, 1, -2, -1), 6, 6)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(CAT_COLORS.get(cat, "#A1A1AA")))
         p.drawEllipse(QPoint(r.left() + 12, r.center().y()), 3, 3)
-        p.setPen(QColor(T.TEXT))
+        p.setPen(T.col(T.TEXT))
         txt = tag + (f"   ← {alias}" if alias else "")
         p.drawText(QRect(r.left() + 24, r.top(), r.width() - 90, r.height()),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                    opt.fontMetrics.elidedText(txt, Qt.TextElideMode.ElideRight, r.width() - 96))
-        p.setPen(QColor(T.TEXT3))
+        p.setPen(T.col(T.TEXT3))
         p.drawText(QRect(r.right() - 64, r.top(), 56, r.height()),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, tags.short_count(count))
         p.restore()
