@@ -24,9 +24,9 @@ def stipple(img, height, invert=False):
     """The dots on a canvas of that height, as (xs, ys, colours): as many in a place as it is bright (or dark, for a light
     theme). Colours: 0 for a plain dot, else the softened 0xRRGGBB of a place in the picture that has real colour."""
     view = img.convertToFormat(QImage.Format.Format_Grayscale8)
-    rgb = img.convertToFormat(QImage.Format.Format_RGB888)
-    rgb = np.frombuffer(rgb.constBits(), np.uint8).reshape(rgb.height(), rgb.bytesPerLine())[:, :rgb.width() * 3]
-    rgb = rgb.reshape(view.height(), view.width(), 3).astype(np.float32)
+    colour = img.convertToFormat(QImage.Format.Format_RGB888)       # stays alive while the array below reads from it
+    rows = np.frombuffer(colour.constBits(), np.uint8).reshape(colour.height(), colour.bytesPerLine())
+    rgb = rows[:, :colour.width() * 3].reshape(view.height(), view.width(), 3).astype(np.float32)
     lum = np.frombuffer(view.constBits(), np.uint8).reshape(view.height(), view.bytesPerLine())[:, :view.width()] / 255
     lo, hi = np.percentile(lum, (2, 98))        # any picture uses the whole range, from no dots to many
     lum = np.clip((lum - lo) / max(hi - lo, 0.01), 0, 1)
