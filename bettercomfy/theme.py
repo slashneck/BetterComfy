@@ -2,7 +2,7 @@
 import re
 
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
 from .config import resource
 
@@ -82,9 +82,14 @@ def _styled(self, text):
 QWidget.setStyleSheet = _styled
 
 
-def reapply():
-    """After a change of mode: the style of every widget that has its own."""
-    for w in QApplication.allWidgets():
+def apply_sheet(w, sheet):
+    """A finished style sheet (from qss()) on one part of the window: restyles only that part."""
+    _raw_style(w, sheet)
+
+
+def restyle_own(widgets):
+    """After a change of mode: these widgets' own styles, if they have one."""
+    for w in widgets:
         s = w.property("_style")
         if isinstance(s, str):
             _raw_style(w, fix(s))

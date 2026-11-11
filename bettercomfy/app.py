@@ -141,6 +141,24 @@ class TopBar(QWidget):
         self.sub.setText(page.subtitle)
 
 
+class LookGuard(QObject):
+    """Windows and menus that open after a change of colours get the new ones as they appear."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+
+    def eventFilter(self, obj, e):
+        win = self.win
+        if e.type() == QEvent.Type.Show and win._look and obj.isWidgetType() and obj.isWindow() and obj is not win \
+                and obj.property("_look") != win._look and obj.parentWidget() in (None, win):
+            obj.setProperty("_look", win._look)
+            T.apply_sheet(obj, win._look_sheet)
+            obj.setPalette(win._look_palette)
+            T.restyle_own([obj] + obj.findChildren(QWidget))
+        return False
+
+
 class Window(QMainWindow):
     _joined = Signal(dict)
     _shredded = Signal(int, int)
@@ -233,6 +251,9 @@ class Window(QMainWindow):
         self._panicked = False
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.undo_delete)
         self._pending_deletes = []
+        self._look = 0                          # how many times the colours changed since the app opened
+        self._look_guard = LookGuard(self)
+        QApplication.instance().installEventFilter(self._look_guard)
         self.global_key = GlobalKey(QApplication.instance(), self.panic)
         self.global_key.bind(cfg.get("panic_key") or "")
         self._tray()
@@ -256,6 +277,7 @@ class Window(QMainWindow):
         if key not in self.pages:
             return
         pg = self.pages[key]
+        self._look_part(pg)                     # a tab that hasn't seen the current colours yet
         self.rail.select(key)
         if animate:
             self.stack.switch(self.stack.indexOf(pg))
@@ -1369,10 +1391,34 @@ class Window(QMainWindow):
     def _apply_accent(self):
         def work():
             T.set_accent(cfg.get("accent"))
-            QApplication.instance().setStyleSheet(T.qss())
+            self._new_look()
             for pg in ("image", "video"):
                 self.pages[pg].bar.refresh_style()
         self._restyle(work)
+
+    def _new_look(self):
+        """Restyling every control at once freezes the app for seconds, most of it for tabs nobody is looking at. So: only
+        the rail, the top bar and the tab on screen now; every other tab when it is opened."""
+        self._look += 1
+        self._look_sheet = T.qss()
+        self._look_palette = _make_palette()
+        main = self.top.parentWidget()
+        T.restyle_own([w for w in main.children() if isinstance(w, QWidget)])
+        for part in (self.rail, self.top, self.stack.currentWidget()):
+            self._look_part(part)
+
+    def _look_part(self, part):
+        if not self._look or part.property("_look") == self._look:
+            return
+        part.setProperty("_look", self._look)
+        T.apply_sheet(part, self._look_sheet)
+        part.setPalette(self._look_palette)
+        inside = [part] + part.findChildren(QWidget)
+        T.restyle_own(inside)
+        for w in inside:
+            ic = w.property("_icon")
+            if ic and isinstance(w, QAbstractButton):
+                w.setIcon(icons.icon(ic[0], ic[1], 18))
 
     def _restyle(self, work):
         """Applying a new look to every control takes a moment: the window as it was stays up, then fades into the new one."""
@@ -1437,14 +1483,7 @@ class Window(QMainWindow):
             mode = "dark" if T.MODE == "light" else "light"
             cfg.set("ui_mode", mode)
             T.set_mode(mode)
-            app = QApplication.instance()
-            _palette(app)
-            app.setStyleSheet(T.qss())
-            T.reapply()
-            for w in app.allWidgets():
-                ic = w.property("_icon")
-                if ic and isinstance(w, QAbstractButton):
-                    w.setIcon(icons.icon(ic[0], ic[1], 18))
+            self._new_look()
             name = "sun" if mode == "dark" else "moon"
             self.top.mode_btn.setIcon(icons.icon(name, "#A1A1AA", 18))
             self.top.mode_btn.setProperty("_icon", [name, "#A1A1AA"])
@@ -1654,6 +1693,10 @@ def _palette(app):
     """A dark base under the stylesheet - nothing ever flashes white."""
     if not isinstance(app.style(), type(None)) and app.style().objectName().lower() != "fusion":
         app.setStyle(QStyleFactory.create("Fusion"))
+    app.setPalette(_make_palette())
+
+
+def _make_palette():
     pal = QPalette()
     for role, col in ((QPalette.ColorRole.Window, T.BG), (QPalette.ColorRole.WindowText, T.TEXT),
                       (QPalette.ColorRole.Base, T.FIELD), (QPalette.ColorRole.AlternateBase, T.SURFACE),
@@ -1668,7 +1711,7 @@ def _palette(app):
     pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, T.col(T.TEXT3))
     pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, T.col(T.TEXT3))
     pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, T.col(T.TEXT3))
-    app.setPalette(pal)
+    return pal
 
 
 def _fonts(app):

@@ -1573,7 +1573,7 @@ class FadeStack(QStackedWidget):
     def _snap(w):
         """A page as a picture, see-through where the page is (grab() would fill those places with the window colour)."""
         ratio = w.devicePixelRatioF()
-        pm = QPixmap(w.size() * ratio)
+        pm = QPixmap(w.rect().size() * ratio)      # (some pages have a setting of their own called size)
         pm.setDevicePixelRatio(ratio)
         pm.fill(Qt.GlobalColor.transparent)
         w.render(pm, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)

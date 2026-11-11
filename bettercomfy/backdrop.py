@@ -6,7 +6,7 @@ import os
 import random
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -16,12 +16,14 @@ KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code"
 ART_DIR = os.path.join(os.path.expanduser("~"), "Pictures", "Better Comfy", "Dot art")     # pictures for Dot art, if any
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
-DENSITY = 0.62                          # dots per pixel where a picture is at its brightest
+DENSITY = 0.1                           # dots per pixel where a picture is at its brightest
+_LAYERS = 8                             # groups of dots that move separately
+_DRIFT = 2                              # how many pixels they wander
 _LINE = 0.075                           # up to this brightness a thin stroke counts as an outline
 _COLOURED = 0.34                        # from this saturation on, a place in the picture counts as having colour
 _CITY_TOP = 230                         # pixels from the top of the window that the city leaves free
-_ART_REACH = 96                         # the dot art has many more dots to move
-_SPEED = {"dots": 33, "cloud": 70, "code": 110, "art": 40}
+_ART_REACH = 120                        # how far the cursor lights up the dot art
+_SPEED = {"dots": 33, "cloud": 70, "code": 110, "art": 70}
 
 
 # ------------------------------------------------------------------------------------------------ dot art
@@ -53,7 +55,7 @@ def _broad_dark(shade):
 
 
 def stipple(img, height, invert=False, detail=1.0):
-    """The dots on a canvas of that height, as (xs, ys, colours): as many in a place as it is bright (or dark, for a light
+    """The dots on a canvas of that height, as (xs, ys, colours, widths): bright places get bigger dots, and as many in a place as it is bright (or dark, for a light
     theme). Colours: 0 for a plain dot, else the softened 0xRRGGBB where the picture is red; blue goes dark. detail: below 1
     for a small picture, which has less to show and gets fewer dots."""
     view = img.convertToFormat(QImage.Format.Format_Grayscale8)
@@ -70,8 +72,9 @@ def stipple(img, height, invert=False, detail=1.0):
     gx, gy = np.meshgrid(np.arange(0, view.width(), step), np.arange(0, view.height(), step))
     gx, gy = gx.ravel(), gy.ravel()
     n = gx.size
-    x = np.clip(gx + rng.random(n) * step, 0, view.width() - 1)
-    y = np.clip(gy + rng.random(n) * step, 0, view.height() - 1)
+    # (only a little off the grid: calm rather than grainy)
+    x = np.clip(gx + (0.3 + rng.random(n) * 0.4) * step, 0, view.width() - 1)
+    y = np.clip(gy + (0.3 + rng.random(n) * 0.4) * step, 0, view.height() - 1)
     v = lum[y.astype(int), x.astype(int)]
     if invert:
         v = np.where(v > 0.01, 1 - v, 0)
@@ -89,7 +92,7 @@ def stipple(img, height, invert=False, detail=1.0):
         v = np.where(broad, 0.3, v)     # a dark grey instead of a black hole
         shade = np.where(broad, 0.13, shade)
     v = np.maximum(v, np.where(red, 0.62, 0))
-    keep = v ** 1.15 > rng.random(n)
+    keep = v ** 0.8 > rng.random(n)
     # softened: a little towards grey and never too dark to see; in steps, so few pens are needed
     soft = c[keep] * 0.78 + c[keep].mean(axis=1, keepdims=True) * 0.22
     soft = np.clip(soft * (190 / np.maximum(soft.max(axis=1, keepdims=True), 1)), 0, 255).astype(np.uint32) & 0xE0
@@ -98,7 +101,8 @@ def stipple(img, height, invert=False, detail=1.0):
     if not invert:
         level = (70 + 185 * shade[keep] ** 0.75).astype(np.uint32) & 0xF0 | 0x0F
         grey = level * 0x10101
-    return x[keep] * scale, y[keep] * scale, np.where(red[keep], tint, grey)
+    widths = np.round((1.5 + 2.2 * v[keep]) * 2) / 2        # in half pixels, so few pens are needed
+    return x[keep] * scale, y[keep] * scale, np.where(red[keep], tint, grey), widths
 
 
 # ------------------------------------------------------------------------------------------------ the widget
@@ -111,7 +115,10 @@ class Backdrop(QWidget):
         self.mouse = QPointF(-999, -999)
         self.points = []
         self.base = None                # what doesn't change: drawn once, then only copied
-        self.cells = {}                 # dot art: the dots by where they are, so only those near the cursor are moved
+        self.art_layers = []            # dot art: the dots in groups that drift separately
+        self.art_xs = self.art_ys = self.art_red = None
+        self.art_origin = QPoint(0, 0)
+        self.art_t = 0.0
         self.city = []
         self.falling = []
         self.glyphs = {}
@@ -131,7 +138,6 @@ class Backdrop(QWidget):
         self.kind = kind
         self.points = []
         self.rebuild()
-        self.setVisible(kind != "none")
         self._run()
         self.update()
 
@@ -140,7 +146,7 @@ class Backdrop(QWidget):
         self.base = None
         self.city = []
         self.falling = []
-        self.cells = {}
+        self.art_layers = []
         self.update()
 
     def resizeEvent(self, e):
@@ -160,9 +166,9 @@ class Backdrop(QWidget):
         m = QPointF(self.mapFromGlobal(QCursor.pos()))
         moved = (m - self.mouse).manhattanLength() > 1
         old, self.mouse = self.mouse, m
-        if self.kind in ("dots", "art"):
+        if self.kind == "dots":
             if moved:                   # only around the cursor: the rest of the app is left alone
-                r = _REACH + 40 if self.kind == "art" else _REACH + 8
+                r = _REACH + 8
                 for c in (old, m):
                     self.update(QRect(int(c.x() - r), int(c.y() - r), 2 * r, 2 * r))
         elif self.kind == "cloud":
@@ -173,11 +179,14 @@ class Backdrop(QWidget):
             self._city_tick()
         if self.kind == "art":
             self._stars_tick()
+            self._art_tick()
 
     def paintEvent(self, e):
-        if self.kind == "none":
-            return
         p = QPainter(self)
+        p.fillRect(e.rect(), T.col(T.BG))       # the window's own background: follows light and dark at once
+        if self.kind == "none":
+            p.end()
+            return
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.kind == "dots":
             self._paint_dots(p, e.rect())
@@ -382,9 +391,9 @@ class Backdrop(QWidget):
                            r.uniform(0, 6.28), r.uniform(0.7, 1.9), r.random() < 0.16] for _ in range(max(70, w * h // 9000))]
         for s in self.stars:
             self.update(QRect(int(s[0]) - 4, int(s[1]) - 4, 9, 9))
-            s[0] = (s[0] + s[2]) % w
-            s[1] = (s[1] + s[3]) % h
-            s[4] += 0.07
+            s[0] = (s[0] + s[2] * 1.75) % w
+            s[1] = (s[1] + s[3] * 1.75) % h
+            s[4] += 0.12
             self.update(QRect(int(s[0]) - 4, int(s[1]) - 4, 9, 9))
 
     def _behind_art(self, x, y):
@@ -407,62 +416,97 @@ class Backdrop(QWidget):
 
     # ---- dot art
     def _build_art(self):
+        """The dots, sorted onto a few see-through layers. Each layer drifts and breathes on its own, which is cheap: only
+        whole layers move, and a page scrolling over them only copies the finished picture."""
         w, h = self.width(), self.height()
-        self.base = QPixmap(max(1, w), max(1, h))
+        self.base = QPixmap(1, 1)
         self.base.fill(Qt.GlobalColor.transparent)
+        self.art_layers = []
+        self.art_xs = np.empty(0)
         self.dot_col = QColor(T.col(T.TEXT if T.MODE == "dark" else T.TEXT2))
-        self.cells = {}
         img = QImage(self.art_file)
         if img.isNull():
             return
         detail = min(1.0, img.height() / 800) ** 0.55
         img = img.scaledToHeight(900, Qt.TransformationMode.SmoothTransformation)
         size = max(1, int(h * 0.97))
-        xs, ys, tints = stipple(img, size, T.MODE == "light", detail)
+        xs, ys, tints, widths = stipple(img, size, T.MODE == "light", detail)
         art_w = size * img.width() / img.height()
         ox, oy = max(0, min(w - art_w, w * 0.64 - art_w / 2)), h - size
-        groups = {}
-        for x, y, tint in zip((xs + ox).tolist(), (ys + oy).tolist(), tints.tolist()):
-            pt = QPointF(x, y)
-            groups.setdefault(tint, QPolygonF()).append(pt)
-            self.cells.setdefault((int(x) // 48, int(y) // 48), []).append(pt)
+        bw, bh = int(art_w) + 2 * _DRIFT + 2, size + 2 * _DRIFT + 2
+        rng = np.random.default_rng(3)
+        layer = rng.integers(0, _LAYERS, xs.size)
+        for n in range(_LAYERS):
+            pm = QPixmap(bw, bh)
+            pm.fill(Qt.GlobalColor.transparent)
+            q = QPainter(pm)
+            q.setRenderHint(QPainter.RenderHint.Antialiasing)
+            mine = layer == n
+            for tint in np.unique(tints[mine]).tolist():
+                same = mine & (tints == tint)
+                for width in np.unique(widths[same]).tolist():
+                    poly = QPolygonF()
+                    for x, y in zip((xs[same & (widths == width)] + _DRIFT).tolist(), (ys[same & (widths == width)] + _DRIFT).tolist()):
+                        poly.append(QPointF(x, y))
+                    q.setPen(QPen(QColor(tint | 0xFF000000) if tint else self.dot_col, width, Qt.PenStyle.SolidLine,
+                                  Qt.PenCapStyle.RoundCap))
+                    q.drawPoints(poly)
+            q.end()
+            self.art_layers.append(pm)
+        self.art_xs, self.art_ys, self.art_red = xs + ox, ys + oy, tints != 0
+        if T.MODE == "dark":                    # (greys are colours too here: only real red counts for the glow)
+            self.art_red = np.array([(t >> 16) - (t & 0xFF) > 40 for t in tints.tolist()], bool)
+        self.base = QPixmap(bw, bh)
+        self.art_origin = QPoint(int(ox) - _DRIFT, int(oy) - _DRIFT)
         self._art_box = QRectF(ox, oy, art_w, size)
         self._art_mask = img.scaled(int(art_w) // 8 + 1, size // 8 + 1).convertToFormat(QImage.Format.Format_Grayscale8)
         self._near = None
+        self._art_frame()
+
+    def _art_frame(self):
+        """This moment of the picture: every layer a pixel or two off its place, a little brighter or dimmer."""
+        if not self.art_layers:
+            return
+        self.base.fill(Qt.GlobalColor.transparent)
+        t = self.art_t
         q = QPainter(self.base)
-        for tint, poly in groups.items():
-            q.setPen(QPen(QColor(tint | 0xFF000000) if tint else self.dot_col, 1.0))
-            q.drawPoints(poly)
+        for n, pm in enumerate(self.art_layers):
+            phase = n * 2.399                   # spread evenly, so they never move together
+            q.setOpacity(0.84 + 0.16 * math.sin(t * 1.15 + phase * 1.7))
+            q.drawPixmap(round(_DRIFT * 0.5 * (math.sin(t * 0.8 + phase) + math.sin(t * 0.37 + phase * 2.3))),
+                         round(_DRIFT * 0.5 * (math.cos(t * 0.65 + phase * 1.3) + math.sin(t * 0.29 + phase * 0.7))), pm)
         q.end()
+
+    def _art_tick(self):
+        if self.base is None or not self.art_layers:
+            return
+        self.art_t += _SPEED["art"] / 1000
+        self._art_frame()
+        self.update(QRect(self.art_origin, self.base.size()))
 
     def _paint_art(self, p):
         if self.base is None:
             self._build_art()
         self._paint_stars(p)
+        if not self.art_layers:
+            return
+        p.drawPixmap(self.art_origin, self.base)
+        # near the cursor the dots simply light up, softly, more the closer they are
         m = self.mouse
-        near = QRect(int(m.x() - _ART_REACH), int(m.y() - _ART_REACH), 2 * _ART_REACH, 2 * _ART_REACH)
-        hole = QRegion(near, QRegion.RegionType.Ellipse)
-        p.setClipRegion(QRegion(self.rect()).subtracted(hole))
-        p.drawPixmap(0, 0, self.base)
-        p.setClipping(False)
-        # the dots around the cursor are pushed outwards, and take on the accent colour (worked out once per position:
-        # the stars ask for many small repaints)
         if self._near is None or self._near[0] != (m.x(), m.y()):
-            poly, hot = QPolygonF(), QPolygonF()
-            for cx in range(near.left() // 48, near.right() // 48 + 1):
-                for cy in range(near.top() // 48, near.bottom() // 48 + 1):
-                    for pt in self.cells.get((cx, cy), ()):
-                        dx, dy = pt.x() - m.x(), pt.y() - m.y()
-                        d = math.hypot(dx, dy)
-                        if d >= _ART_REACH:
-                            continue
-                        k = 1 - d / _ART_REACH
-                        push = 30 * k * k / max(d, 1)
-                        (hot if k > 0.35 else poly).append(QPointF(pt.x() + dx * push, pt.y() + dy * push))
-            self._near = ((m.x(), m.y()), poly, hot)
-        _pos, poly, hot = self._near
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        p.setPen(QPen(self.dot_col, 1.0))
-        p.drawPoints(poly)
-        p.setPen(QPen(T.accent(), 1.0))
-        p.drawPoints(hot)
+            d = np.hypot(self.art_xs - m.x(), self.art_ys - m.y())
+            k = 1 - d / _ART_REACH
+            bands = []
+            for lo, hi, alpha, width in ((0.0, 0.33, 0.16, 3.0), (0.33, 0.66, 0.3, 3.4), (0.66, 1.01, 0.46, 3.8)):
+                pick = (k > lo) & (k <= hi)
+                for red in (False, True):
+                    poly = QPolygonF()
+                    for x, y in zip(self.art_xs[pick & (self.art_red == red)].tolist(), self.art_ys[pick & (self.art_red == red)].tolist()):
+                        poly.append(QPointF(x, y))
+                    bands.append((poly, alpha, width, red))
+            self._near = ((m.x(), m.y()), bands)
+        for poly, alpha, width, red in self._near[1]:
+            c = QColor(232, 76, 76) if red else QColor(T.col(T.TEXT))
+            c.setAlphaF(alpha)
+            p.setPen(QPen(c, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawPoints(poly)
