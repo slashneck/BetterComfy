@@ -95,6 +95,7 @@ DEFAULTS = {
     "clean_copies": False,            # a second file of each result without prompt and settings (not private jobs)
     "export_dir": "",
     "ui_mode": "dark",                # dark or light
+    "backdrop_art": "",               # the picture Dot art is made from
     "backdrop": "none",               # the moving background: none, dots, cloud or code
     "move_dir": "",
     "seen_version": "",               # the version whose What's new was shown

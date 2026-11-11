@@ -2,8 +2,9 @@
 import ctypes
 import sys
 
-from PySide6.QtCore import QAbstractNativeEventFilter, Qt
+from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QKeyCombination, Qt, Signal
 from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import QLineEdit
 
 _ID = 0xBC01
 _WM_HOTKEY = 0x0312
@@ -21,9 +22,16 @@ def _vk(key):
             Qt.Key.Key_Escape.value: 0x1B}.get(key)
 
 
+def _numpad(key):
+    if Qt.Key.Key_0.value <= key <= Qt.Key.Key_9.value:
+        return 0x60 + key - Qt.Key.Key_0.value
+    return {Qt.Key.Key_Asterisk.value: 0x6A, Qt.Key.Key_Plus.value: 0x6B, Qt.Key.Key_Minus.value: 0x6D,
+            Qt.Key.Key_Period.value: 0x6E, Qt.Key.Key_Slash.value: 0x6F}.get(key)
+
+
 def parse(text):
-    """(modifiers, virtual key) of a key combination, or None. Alone only F keys, Pause and Scroll Lock are allowed:
-    a plain letter would stop working in every other program."""
+    """(modifiers, virtual key) of a key combination, or None. Alone only F keys, numpad keys, Pause and Scroll Lock are
+    allowed: a plain letter would stop working in every other program."""
     seq = QKeySequence(text or "")
     if seq.isEmpty():
         return None
@@ -33,10 +41,45 @@ def parse(text):
                       (Qt.KeyboardModifier.ShiftModifier, 4), (Qt.KeyboardModifier.MetaModifier, 8)):
         if m & flag:
             mods |= bit
-    vk = _vk(combo.key().value)
-    if vk is None or not (mods or 0x70 <= vk <= 0x87 or vk in (0x13, 0x91)):
+    pad = bool(m & Qt.KeyboardModifier.KeypadModifier)
+    vk = _numpad(combo.key().value) if pad else _vk(combo.key().value)
+    if vk is None or not (mods or pad or 0x70 <= vk <= 0x87 or vk in (0x13, 0x91)):
         return None
     return mods, vk
+
+
+class KeyCatcher(QLineEdit):
+    """Click it and press the keys: F keys, numpad keys and combinations all count. Esc leaves it as it was."""
+    caught = Signal(str)
+    _SKIP = (Qt.Key.Key_Shift, Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Meta, Qt.Key.Key_AltGr, Qt.Key.Key_unknown)
+
+    def __init__(self, text=""):
+        super().__init__(text)
+        self.setReadOnly(True)
+        self.setPlaceholderText("Click here, then press the key")
+
+    def event(self, e):
+        if e.type() == QEvent.Type.ShortcutOverride:        # F1, Ctrl+K and the like are for this field while it has focus
+            e.accept()
+            return True
+        if e.type() == QEvent.Type.KeyPress and e.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            self.keyPressEvent(e)
+            return True
+        return super().event(e)
+
+    def keyPressEvent(self, e):
+        if e.key() in self._SKIP:
+            return
+        if e.key() == Qt.Key.Key_Escape:
+            self.clearFocus()
+            return
+        keep = (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier |
+                Qt.KeyboardModifier.MetaModifier | Qt.KeyboardModifier.KeypadModifier)
+        seq = QKeySequence(QKeyCombination(e.modifiers() & keep, Qt.Key(e.key())))
+        text = seq.toString(QKeySequence.SequenceFormat.PortableText)
+        self.setText(text)
+        self.clearFocus()
+        self.caught.emit(text)
 
 
 class GlobalKey(QAbstractNativeEventFilter):
@@ -63,7 +106,9 @@ class GlobalKey(QAbstractNativeEventFilter):
         self.bound = False
 
     def nativeEventFilter(self, event_type, message):
-        if event_type == b"windows_generic_MSG" or event_type == "windows_generic_MSG":
+        name = bytes(event_type).decode("ascii", "ignore") if not isinstance(event_type, str) else event_type
+        # a hotkey with no window of its own arrives as a message of the thread: the "dispatcher" kind
+        if name in ("windows_generic_MSG", "windows_dispatcher_MSG"):
             from ctypes import wintypes
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == _WM_HOTKEY and msg.wParam == _ID:

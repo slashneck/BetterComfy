@@ -4,7 +4,7 @@ import os
 import threading
 from collections import deque
 
-from PySide6.QtCore import QEasingCurve, QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QSpinBox, QStyledItemDelegate, QStyleOptionViewItem,
@@ -314,6 +314,9 @@ class GalleryPage(QWidget):
         self.cur = None
         self.place = "all"
         self.stack = None               # the stack of look-alikes being gone through
+        self._dup_cache = None
+        self._later = {}                # row -> (item, what makes its picture): filled in as they are reached
+        self._later_timer = QTimer(self, interval=0, timeout=self._load_later)
         self._dup_busy = False
         self._dups_found.connect(self._got_dups)
         self._open = None               # the collection whose sub-collections are folded out ("col:id" / "vcol:id")
@@ -525,6 +528,8 @@ class GalleryPage(QWidget):
         self.history.added.connect(self._changed)
         self.history.removed.connect(self._changed)
         self.history.restored.connect(self._changed)
+        for sig in (self.history.added, self.history.removed, self.history.updated, self.history.restored):
+            sig.connect(self._forget_dups)
         self.history.updated.connect(self._updated)
         self.history.changed.connect(self._fill_nav)
         self.history.reloaded.connect(self.drives_changed)
@@ -1366,9 +1371,14 @@ class GalleryPage(QWidget):
         self._rows = {}
         self.grid.setIconSize(QSize(self.thumb, self.thumb))
         self.grid.setGridSize(QSize(self.thumb + 14, self.thumb + 14))
-        for e in self._shown:
+        self._later = {}
+        for row, e in enumerate(self._shown):
             piled = not self.stack and not in_vault and e.get("dup") in groups
-            it = QListWidgetItem(self._stack_icon(e, len(groups[e["dup"]])) if piled else self._icon(e), "")
+            make = (lambda e=e: self._stack_icon(e, len(groups[e["dup"]]))) if piled else (lambda e=e: self._icon(e))
+            icon = self._cached_icon(e, piled, groups)
+            it = QListWidgetItem(icon if icon is not None else self._blank_icon(), "")
+            if icon is None:
+                self._later[row] = (it, make)
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
             it.setToolTip((e.get("prompt") or "")[:300])
             self.grid.addItem(it)
@@ -1376,6 +1386,8 @@ class GalleryPage(QWidget):
             if e["id"] == keep:
                 self.grid.setCurrentItem(it)
         self.grid.blockSignals(False)
+        if self._later:
+            self._later_timer.start()
         self.count.setText(f"{len(items)} item{'s' if len(items) != 1 else ''}")
         self.grid.setVisible(bool(items))
         self.empty.setVisible(not items)
@@ -1464,6 +1476,9 @@ class GalleryPage(QWidget):
         elif e["kind"] == "video":
             self.player.show_image(e.get("thumb") or "", "Loading…", fade=False)
             self.loader.load(e["id"], e["file"])
+        elif not self.stack and e.get("dup") in self._dup_groups():
+            pile = self._dup_groups()[e["dup"]]
+            self.player.show_image(self._collage([e] + [x for x in pile if x is not e]), f"Stack of {len(pile)}")
         else:
             self.player.show_image(e["file"])
         self._flags_ui()
@@ -1692,12 +1707,91 @@ class GalleryPage(QWidget):
         self.app.result_action(k, self.cur, self)
 
     def _dup_groups(self):
-        """Stack number -> its pictures (a stack of one is no stack)."""
-        out = {}
-        for e in self.history.items:
-            if e.get("dup"):
-                out.setdefault(e["dup"], []).append(e)
-        return {g: v for g, v in out.items() if len(v) > 1}
+        """Stack number -> its pictures (a stack of one is no stack). Counted once per change."""
+        if self._dup_cache is None:
+            out = {}
+            for e in self.history.items:
+                if e.get("dup"):
+                    out.setdefault(e["dup"], []).append(e)
+            self._dup_cache = {g: v for g, v in out.items() if len(v) > 1}
+        return self._dup_cache
+
+    def _collage(self, pile):
+        """The preview of a stack: up to 4 of its pictures; the 4th says how many more there are."""
+        n = len(pile)
+        w, gap = 900, 12
+        half = (w - gap) // 2
+        show = pile[:4]
+        h = half if n == 2 else w
+        rects = {2: [(0, 0, half, half), (half + gap, 0, half, half)],
+                 3: [(0, 0, half, half), (half + gap, 0, half, half), (0, half + gap, w, half)]}.get(
+            len(show), [(0, 0, half, half), (half + gap, 0, half, half), (0, half + gap, half, half),
+                        (half + gap, half + gap, half, half)])
+        out = QPixmap(w, h)
+        out.fill(Qt.GlobalColor.transparent)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for i, (e, (x, y, rw, rh)) in enumerate(zip(show, rects)):
+            pm = QPixmap(e.get("thumb") or e["file"])
+            clip = QPainterPath()
+            clip.addRoundedRect(QRectF(x, y, rw, rh), 22, 22)
+            p.save()
+            p.setClipPath(clip)
+            p.fillRect(QRectF(x, y, rw, rh), T.col(T.SURFACE2))
+            if not pm.isNull():
+                pm = pm.scaled(rw, rh, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                p.drawPixmap(x + (rw - pm.width()) // 2, y + (rh - pm.height()) // 2, pm)
+            if i == 3 and n > 4:
+                p.fillRect(QRectF(x, y, rw, rh), QColor(0, 0, 0, 170))
+                f = QFont(self.font())
+                f.setPixelSize(96)
+                f.setBold(True)
+                p.setFont(f)
+                p.setPen(QColor(255, 255, 255))
+                p.drawText(QRectF(x, y, rw, rh), Qt.AlignmentFlag.AlignCenter, f"+{n - 3}")
+            p.restore()
+        p.end()
+        return out
+
+    def _blank_icon(self):
+        key = ("blank", self.thumb, T.MODE)
+        if key not in self._icons:
+            s = self.thumb * 2
+            out = QPixmap(s, s)
+            out.fill(Qt.GlobalColor.transparent)
+            p = QPainter(out)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(T.col(T.SURFACE2))
+            p.drawRoundedRect(QRectF(0, 0, s, s), 20, 20)
+            p.end()
+            out.setDevicePixelRatio(2.0)
+            self._icons[key] = QIcon(out)
+        return self._icons[key]
+
+    def _cached_icon(self, e, piled, groups):
+        """Its picture if it is ready (or the vault's own way of making one), else None."""
+        if e.get("vault"):
+            return self._vicon(e)
+        key = (("stack", e["id"], len(groups[e["dup"]]), self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("thumb"))
+               if piled else (e["id"], self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("store"), e.get("thumb")))
+        return self._icons.get(key)
+
+    def _load_later(self):
+        """A few pictures per moment, starting with those on screen, so the window never freezes."""
+        if not self._later:
+            self._later_timer.stop()
+            return
+        top = self.grid.indexAt(QPoint(8, 8)).row()
+        start = max(top, 0)
+        near = [r for r in range(start, start + 48) if r in self._later][:6]
+        for row in near or list(self._later)[:6]:
+            it, make = self._later.pop(row)
+            try:
+                it.setIcon(make())
+            except RuntimeError:        # the list was filled anew in the meantime
+                pass
 
     def _stack_icon(self, e, n):
         """Its normal tile on top of two more, with how many there are."""
@@ -1730,6 +1824,9 @@ class GalleryPage(QWidget):
             out.setDevicePixelRatio(2.0)
             self._icons[key] = QIcon(out)
         return self._icons[key]
+
+    def _forget_dups(self, *_a):
+        self._dup_cache = None
 
     def _enter_stack(self, g):
         self.stack = g

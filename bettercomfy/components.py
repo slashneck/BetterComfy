@@ -233,6 +233,8 @@ class ModelPicker(Combo):
     """A model dropdown that opens as a grid: each model's picture and name, with a search."""
 
     def showPopup(self):
+        if time.monotonic() - ModelGrid.closed_at < 0.3:      # this very click just closed it
+            return
         if self.count() > 1 or (self.count() == 1 and self.itemData(0)):
             ModelGrid(self).popup()
         else:
@@ -241,6 +243,7 @@ class ModelPicker(Combo):
 
 class ModelGrid(QFrame):
     _cache = {}                         # (cover, blurred) -> icon
+    closed_at = 0.0
 
     def __init__(self, combo):
         super().__init__(combo.window(), Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
@@ -317,6 +320,10 @@ class ModelGrid(QFrame):
         for i in range(self.list.count()):
             it = self.list.item(i)
             it.setHidden(not all(w in it.toolTip().lower() for w in words))
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        ModelGrid.closed_at = time.monotonic()
 
     def _pick(self, it):
         self.combo.setCurrentIndex(it.data(Qt.ItemDataRole.UserRole))

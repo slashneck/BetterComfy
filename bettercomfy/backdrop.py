@@ -1,22 +1,42 @@
-"""The moving backgrounds (Settings, Look & feel): faint, behind everything, only drawn while the app is in front.
-Under another program, or a game, they stop completely."""
+"""The moving backgrounds (Settings, Look & feel): behind everything, only drawn while the app is in front. Under another
+program, or a game, they stop completely. No pictures come with them: Dot art is made from one you pick."""
 import math
 import random
 
+import numpy as np
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
 from . import theme as T
+from .config import cfg
 
-KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Dot cloud"), ("code", "Code"))
-_CODE = ("for seed in batch:", "    latent = noise(seed)", "    image = decode(latent)", "while steps_left:", "    x = sampler.step(x)",
-         "prompt = weights(words)", "if cfg > 1.0:", "    guide(x, prompt)", "def blend(a, b, t):", "    return a + (b - a) * t",
-         "model.load()", "vae.decode(x)", "queue.put(job)", "return image", "sigmas = schedule(steps)")
+KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code", "Binary city"), ("art", "Dot art"))
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
+_ART_REACH = 96                         # the dot art has many more dots to move
+_SPEED = {"dots": 33, "cloud": 70, "code": 110, "art": 33}
 
 
+# ------------------------------------------------------------------------------------------------ dot art
+def stipple(img, height, invert=False):
+    """The dots on a canvas of that height, as (xs, ys): as many in a place as it is bright (or dark, for a light theme)."""
+    view = img.convertToFormat(QImage.Format.Format_Grayscale8)
+    lum = np.frombuffer(view.constBits(), np.uint8).reshape(view.height(), view.bytesPerLine())[:, :view.width()] / 255
+    lo, hi = np.percentile(lum, (2, 98))        # any picture uses the whole range, from no dots to many
+    lum = np.clip((lum - lo) / max(hi - lo, 0.01), 0, 1)
+    scale = height / view.height()
+    rng = np.random.default_rng(7)
+    n = int(view.width() * view.height() * scale * scale * 0.42)    # dots if everything were white
+    x, y = rng.random(n) * view.width(), rng.random(n) * view.height()
+    v = lum[y.astype(int), x.astype(int)]
+    if invert:
+        v = np.where(v > 0.01, 1 - v, 0)
+    keep = v ** 1.5 > rng.random(n)
+    return x[keep] * scale, y[keep] * scale
+
+
+# ------------------------------------------------------------------------------------------------ the widget
 class Backdrop(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
@@ -24,25 +44,41 @@ class Backdrop(QWidget):
         self.kind = "none"
         self.mouse = QPointF(-999, -999)
         self.points = []
-        self.rows = []
+        self.base = None                # what doesn't change: drawn once, then only copied
+        self.cells = {}                 # dot art: the dots by where they are, so only those near the cursor are moved
+        self.city = []
+        self.falling = []
+        self.glyphs = {}
         self.timer = QTimer(self, timeout=self._tick)
+        self.resized = QTimer(self, singleShot=True, interval=220, timeout=self.rebuild)    # once, when the resizing stops
         QApplication.instance().applicationStateChanged.connect(lambda _s: self._run())
 
     def set_kind(self, kind):
         self.kind = kind
         self.points = []
-        self.rows = []
+        self.rebuild()
         self.setVisible(kind != "none")
         self._run()
         self.update()
 
+    def rebuild(self):
+        """After a change of size or look."""
+        self.base = None
+        self.city = []
+        self.falling = []
+        self.cells = {}
+        self.update()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.resized.start()
+
     def _run(self):
         from .widgets import anims_on
         on = self.kind != "none" and anims_on() and QApplication.applicationState() == Qt.ApplicationState.ApplicationActive
-        if on and not self.timer.isActive():
-            self.timer.start({"dots": 33, "cloud": 80, "code": 120}.get(self.kind, 80))
-        elif not on:
-            self.timer.stop()
+        self.timer.stop()
+        if on:
+            self.timer.start(_SPEED.get(self.kind, 80))
 
     def _tick(self):
         if not self.window().isVisible():
@@ -50,50 +86,17 @@ class Backdrop(QWidget):
         m = QPointF(self.mapFromGlobal(QCursor.pos()))
         moved = (m - self.mouse).manhattanLength() > 1
         old, self.mouse = self.mouse, m
-        if self.kind == "dots":
+        if self.kind in ("dots", "art"):
             if moved:                   # only around the cursor: the rest of the app is left alone
+                r = _REACH + 40 if self.kind == "art" else _REACH + 8
                 for c in (old, m):
-                    self.update(QRect(int(c.x() - _REACH - 4), int(c.y() - _REACH - 4), 2 * _REACH + 8, 2 * _REACH + 8))
+                    self.update(QRect(int(c.x() - r), int(c.y() - r), 2 * r, 2 * r))
         elif self.kind == "cloud":
             self._drift()
             self.update()
         elif self.kind == "code":
-            self._type()
+            self._city_tick()
 
-    # ---- dot cloud
-    def _drift(self):
-        w, h = max(1, self.width()), max(1, self.height())
-        if not self.points:
-            r = random.Random()
-            self.points = [[r.uniform(0, w), r.uniform(0, h), r.uniform(-0.5, 0.5), r.uniform(-0.5, 0.5)] for _ in range(60)]
-        for pt in self.points:
-            dx, dy = pt[0] - self.mouse.x(), pt[1] - self.mouse.y()
-            d = math.hypot(dx, dy)
-            if 1 < d < _REACH:          # moves aside a little
-                pt[2] += dx / d * 0.05
-                pt[3] += dy / d * 0.05
-            sp = math.hypot(pt[2], pt[3])
-            if sp > 0.7:
-                pt[2], pt[3] = pt[2] * 0.97, pt[3] * 0.97
-            pt[0] = (pt[0] + pt[2]) % w
-            pt[1] = (pt[1] + pt[3]) % h
-
-    # ---- code being written
-    def _type(self):
-        w, h = self.width(), self.height()
-        if not self.rows or len(self.rows) < 8 and random.random() < 0.12:
-            self.rows.append({"x": random.randint(20, max(21, w - 340)), "y": random.randint(30, max(31, h - 30)),
-                              "text": random.choice(_CODE), "n": 0, "life": 40})
-        for r in list(self.rows):
-            if r["n"] < len(r["text"]):
-                r["n"] += 1
-            else:
-                r["life"] -= 1
-                if r["life"] <= 0:
-                    self.rows.remove(r)
-            self.update(QRect(r["x"] - 4, r["y"] - 16, 340, 24))
-
-    # ---- drawing
     def paintEvent(self, e):
         if self.kind == "none":
             return
@@ -103,10 +106,13 @@ class Backdrop(QWidget):
             self._paint_dots(p, e.rect())
         elif self.kind == "cloud":
             self._paint_cloud(p)
+        elif self.kind == "code":
+            self._paint_city(p)
         else:
-            self._paint_code(p)
+            self._paint_art(p)
         p.end()
 
+    # ---- dots
     def _paint_dots(self, p, area):
         base = T.col(T.BORDER_HI)
         accent = T.accent()
@@ -125,29 +131,176 @@ class Backdrop(QWidget):
                 r = 1.2 + 1.3 * k
                 p.drawEllipse(QPointF(x + dx * off, y + dy * off), r, r)
 
+    # ---- constellation
+    def _drift(self):
+        w, h = max(1, self.width()), max(1, self.height())
+        if not self.points:
+            r = random.Random()
+            self.points = [[r.uniform(0, w), r.uniform(0, h), r.uniform(-0.6, 0.6), r.uniform(-0.6, 0.6)]
+                           for _ in range(max(70, w * h // 11000))]
+        for pt in self.points:
+            dx, dy = pt[0] - self.mouse.x(), pt[1] - self.mouse.y()
+            d = math.hypot(dx, dy)
+            if 1 < d < _REACH:          # moves aside a little
+                pt[2] += dx / d * 0.06
+                pt[3] += dy / d * 0.06
+            if math.hypot(pt[2], pt[3]) > 0.8:
+                pt[2], pt[3] = pt[2] * 0.97, pt[3] * 0.97
+            pt[0] = (pt[0] + pt[2]) % w
+            pt[1] = (pt[1] + pt[3]) % h
+
     def _paint_cloud(self, p):
-        line = QColor(T.col(T.BORDER_HI))
+        line = QColor(T.col(T.TEXT3))
         for i, a in enumerate(self.points):
             for b in self.points[i + 1:]:
-                d = math.hypot(a[0] - b[0], a[1] - b[1])
-                if d < 130:
-                    line.setAlphaF(0.5 * (1 - d / 130))
+                d = abs(a[0] - b[0]) + abs(a[1] - b[1])
+                if d < 150:
+                    line.setAlphaF(0.42 * (1 - d / 150))
                     p.setPen(QPen(line, 1))
                     p.drawLine(QPointF(a[0], a[1]), QPointF(b[0], b[1]))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(T.col(T.TEXT3))
+        p.setBrush(T.col(T.TEXT2))
         for a in self.points:
-            p.drawEllipse(QPointF(a[0], a[1]), 1.6, 1.6)
+            p.drawEllipse(QPointF(a[0], a[1]), 1.8, 1.8)
 
-    def _paint_code(self, p):
-        f = QFont("Cascadia Mono")
-        f.setStyleHint(QFont.StyleHint.Monospace)
-        f.setPixelSize(13)
-        p.setFont(f)
-        col = QColor(T.col(T.TEXT3))
-        for r in self.rows:
-            col.setAlphaF(0.55 * min(1.0, r["life"] / 12))
-            p.setPen(col)
-            p.drawText(QRectF(r["x"], r["y"] - 14, 340, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       r["text"][:r["n"]])
+    # ---- binary city
+    def _glyph(self, ch, alpha):
+        key = (ch, alpha, T.MODE)
+        if key not in self.glyphs:
+            pm = QPixmap(13, 18)
+            pm.fill(Qt.GlobalColor.transparent)
+            q = QPainter(pm)
+            f = QFont("Cascadia Mono")
+            f.setStyleHint(QFont.StyleHint.Monospace)
+            f.setPixelSize(13)
+            q.setFont(f)
+            c = QColor(T.col(T.TEXT))
+            c.setAlphaF(alpha / 10)
+            q.setPen(c)
+            q.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, ch)
+            q.end()
+            self.glyphs[key] = pm
+        return self.glyphs[key]
 
+    def _build_city(self):
+        """Towers of 0 and 1 seen from a corner, each one dissolving at the bottom."""
+        w, h = self.width(), self.height()
+        rng = random.Random(11)
+        self.base = QPixmap(max(1, w), max(1, h))
+        self.base.fill(Qt.GlobalColor.transparent)
+        self.city = []
+        cw, ch = 13, 18
+        cols = w // cw + 1
+        rows = h // ch + 1
+        q = QPainter(self.base)
+        c = -2
+        while c < cols:
+            bw = rng.randint(12, 22)
+            mid = c + bw / 2
+            roof = rng.uniform(0.04, 0.42) * rows
+            spire = rng.random() < 0.6
+            for col in range(max(0, c), min(cols, c + bw)):
+                off = abs(col - mid)
+                top = roof + off * 0.55             # the roof falls away on both sides of the corner
+                if spire and off < 2.4:
+                    top -= rows * 0.09
+                # towers stand on a line that dips at each corner
+                bottom = rows * 0.97 - off * 0.8
+                span = max(1.0, bottom - top)
+                for row in range(max(0, int(top)), min(rows, int(bottom) + 1)):
+                    d = (row - top) / span
+                    if d > 0.58 and rng.random() < (d - 0.58) / 0.42 * 1.25:     # thinner and thinner towards the ground
+                        continue
+                    alpha = int(round(max(2.0, 8.0 - 5.0 * d)))
+                    digit = rng.choice("01")
+                    x, y = col * cw, row * ch + int(off * 2)
+                    q.drawPixmap(x, y, self._glyph(digit, alpha))
+                    self.city.append((x, y, alpha))
+            c += bw + rng.randint(-2, 1)
+        q.end()
+
+    def _city_tick(self):
+        if self.base is None:
+            self._build_city()
+            self.update()
+            return
+        if not self.city:
+            return
+        q = QPainter(self.base)
+        for _ in range(26):             # a few digits change all the time
+            x, y, alpha = random.choice(self.city)
+            q.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            q.fillRect(QRect(x, y, 13, 18), Qt.GlobalColor.transparent)
+            q.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            q.drawPixmap(x, y, self._glyph(random.choice("01"), alpha))
+            self.update(QRect(x, y, 13, 18))
+        q.end()
+        # and some come loose and fall
+        if len(self.falling) < 40 and random.random() < 0.7:
+            x, y, alpha = random.choice(self.city)
+            self.falling.append([x, y, random.choice("01"), random.uniform(2.5, 6.5)])
+        for f in list(self.falling):
+            self.update(QRect(f[0], int(f[1]), 13, 18))
+            f[1] += f[3]
+            self.update(QRect(f[0], int(f[1]), 13, 18))
+            if f[1] > self.height():
+                self.falling.remove(f)
+
+    def _paint_city(self, p):
+        if self.base is None:
+            self._build_city()
+        p.drawPixmap(0, 0, self.base)
+        for f in self.falling:
+            p.drawPixmap(f[0], int(f[1]), self._glyph(f[2], 4))
+
+    # ---- dot art
+    def _build_art(self):
+        w, h = self.width(), self.height()
+        self.base = QPixmap(max(1, w), max(1, h))
+        self.base.fill(Qt.GlobalColor.transparent)
+        self.dot_col = QColor(T.col(T.TEXT2 if T.MODE == "dark" else T.TEXT3))
+        self.cells = {}
+        img = QImage(cfg.get("backdrop_art") or "")
+        if img.isNull():
+            return
+        img = img.scaledToHeight(900, Qt.TransformationMode.SmoothTransformation)
+        size = max(1, int(h * 0.97))
+        xs, ys = stipple(img, size, T.MODE == "light")
+        art_w = size * img.width() / img.height()
+        ox, oy = max(0, min(w - art_w, w * 0.64 - art_w / 2)), h - size
+        poly = QPolygonF()
+        for x, y in zip((xs + ox).tolist(), (ys + oy).tolist()):
+            pt = QPointF(x, y)
+            poly.append(pt)
+            self.cells.setdefault((int(x) // 48, int(y) // 48), []).append(pt)
+        q = QPainter(self.base)
+        q.setPen(QPen(self.dot_col, 1.0))
+        q.drawPoints(poly)
+        q.end()
+
+    def _paint_art(self, p):
+        if self.base is None:
+            self._build_art()
+        m = self.mouse
+        near = QRect(int(m.x() - _ART_REACH), int(m.y() - _ART_REACH), 2 * _ART_REACH, 2 * _ART_REACH)
+        hole = QRegion(near, QRegion.RegionType.Ellipse)
+        p.setClipRegion(QRegion(self.rect()).subtracted(hole))
+        p.drawPixmap(0, 0, self.base)
+        p.setClipping(False)
+        # the dots around the cursor are pushed outwards, and take on the accent colour
+        poly, hot = QPolygonF(), QPolygonF()
+        for cx in range(near.left() // 48, near.right() // 48 + 1):
+            for cy in range(near.top() // 48, near.bottom() // 48 + 1):
+                for pt in self.cells.get((cx, cy), ()):
+                    dx, dy = pt.x() - m.x(), pt.y() - m.y()
+                    d = math.hypot(dx, dy)
+                    if d >= _ART_REACH:
+                        continue
+                    k = 1 - d / _ART_REACH
+                    push = 30 * k * k / max(d, 1)
+                    (hot if k > 0.35 else poly).append(QPointF(pt.x() + dx * push, pt.y() + dy * push))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.setPen(QPen(self.dot_col, 1.0))
+        p.drawPoints(poly)
+        p.setPen(QPen(T.accent(), 1.0))
+        p.drawPoints(hot)

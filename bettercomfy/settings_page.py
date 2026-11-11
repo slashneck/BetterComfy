@@ -3,13 +3,14 @@ import os
 import threading
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPixmap
-from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QKeySequenceEdit, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
+from PySide6.QtGui import QColor, QDesktopServices, QPixmap
+from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
     QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from . import comfy, icons, system, theme as T
 from .config import APP_NAME, BASE, VERSION, cfg, resource
 from .backdrop import KINDS
+from .hotkey import KeyCatcher
 from .queue_page import AFTER
 from .quick import ConnectionLog, Shortcuts
 from .widgets import (ChipBox, Combo, Card, Scroll, Segmented, Slider, ToggleRow, button, chip, field, hrow, label,
@@ -260,9 +261,8 @@ class SettingsPage(QWidget):
                                                                      "in ComfyUI's cache. The models load again for "
                                                                      "the next job.",
                         cfg.get("comfy_forget_private", True), lambda v: cfg.set("comfy_forget_private", v)))
-        self.panic_edit = QKeySequenceEdit(QKeySequence(cfg.get("panic_key") or ""))
-        self.panic_edit.setMaximumSequenceLength(1)
-        self.panic_edit.editingFinished.connect(self._panic_key)
+        self.panic_edit = KeyCatcher(cfg.get("panic_key") or "")
+        self.panic_edit.caught.connect(self._panic_key)
         c.add(field("Panic key", hrow(self.panic_edit, button("Clear", self._panic_clear, "Ghost"), spacing=6),
                     "Works everywhere, even in a game: hides Better Comfy and locks the vault. Press it again to bring "
                     "the window back.", label_w=90))
@@ -422,8 +422,10 @@ class SettingsPage(QWidget):
         for k, t in KINDS:
             self.backdrop.addItem(t, k)
         set_combo(self.backdrop, cfg.get("backdrop") or "none")
-        self.backdrop.currentIndexChanged.connect(lambda _i: self.app.set_backdrop(self.backdrop.currentData()))
-        c.add(field("Background", self.backdrop, "A faint moving background behind the pages. It stops when another "
+        self.backdrop.currentIndexChanged.connect(lambda _i: self._backdrop())
+        self.art_btn = button("Picture…", self._backdrop_art, "Ghost", "image", "The picture that is turned into dots")
+        self.art_btn.setVisible(self.backdrop.currentData() == "art")
+        c.add(field("Background", hrow(self.backdrop, self.art_btn, spacing=6), "A faint moving background behind the pages. It stops when another "
                                                  "program is in front. Needs Animations on.", label_w=90))
         self.ui_scale = Slider(80, 150, 5, 0, float(cfg.get("ui_scale") or 100), self._ui_scale, suffix=" %", width=80)
         scale_chips = ChipBox(4)
@@ -1183,14 +1185,13 @@ class SettingsPage(QWidget):
     def sync_after(self):
         set_combo(self.after, cfg.get("after_queue"))
 
-    def _panic_key(self):
-        text = self.panic_edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText)
+    def _panic_key(self, text):
         if self.app.global_key.bind(text):
             cfg.set("panic_key", text)
             if text:
                 self.app.toast(f"Panic key: {text}", "ok")
         else:
-            self.panic_edit.setKeySequence(QKeySequence(cfg.get("panic_key") or ""))
+            self.panic_edit.setText(cfg.get("panic_key") or "")
             self.app.global_key.bind(cfg.get("panic_key") or "")
             self.app.toast("That one can't be used: add Ctrl, Alt or Shift, or another program already has it.", "warn")
 
@@ -1202,6 +1203,19 @@ class SettingsPage(QWidget):
     def _whats_new(self):
         from .whatsnew import WhatsNew
         WhatsNew(self).exec()
+
+    def _backdrop(self):
+        kind = self.backdrop.currentData()
+        self.art_btn.setVisible(kind == "art")
+        if kind == "art" and not os.path.isfile(cfg.get("backdrop_art") or ""):
+            self._backdrop_art()
+        self.app.set_backdrop(kind)
+
+    def _backdrop_art(self):
+        path, _f = QFileDialog.getOpenFileName(self, "A picture for the dots", "", "Pictures (*.png *.jpg *.jpeg *.webp)")
+        if path:
+            cfg.set("backdrop_art", path)
+            self.app.backdrop.rebuild()
 
     def _ui_scale(self, v):
         cfg.set("ui_scale", int(v))

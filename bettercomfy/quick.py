@@ -16,7 +16,7 @@ class QuickSearch(QDialog):
     """Type a few letters: any tab, setting, model, LoRA or character; Enter goes there."""
 
     def __init__(self, app):
-        super().__init__(app, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        super().__init__(app, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.app = app
         self.setObjectName("Quick")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -28,7 +28,6 @@ class QuickSearch(QDialog):
         self.edit = QLineEdit()
         self.edit.setPlaceholderText("Go to a tab, setting, model, LoRA or character…")
         self.edit.textChanged.connect(self._fill)
-        self.edit.returnPressed.connect(self._go)
         self.edit.installEventFilter(self)
         self.list = QListWidget()
         self.list.setFixedHeight(340)
@@ -41,6 +40,16 @@ class QuickSearch(QDialog):
         self.adjustSize()
         self.move(g.x() + (g.width() - self.width()) // 2, g.y() + 90)
         self.edit.setFocus()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.activateWindow()
+        self.edit.setFocus()
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        if e.type() == e.Type.ActivationChange and not self.isActiveWindow() and self.isVisible():
+            self.reject()               # clicked somewhere else
 
     def _collect(self):
         a = self.app
@@ -105,6 +114,9 @@ class QuickSearch(QDialog):
         self.list.setCurrentRow(0)
 
     def eventFilter(self, obj, e):
+        if obj is self.edit and e.type() == e.Type.KeyPress and e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._go()
+            return True
         if obj is self.edit and e.type() == e.Type.KeyPress and e.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up):
             step = 1 if e.key() == Qt.Key.Key_Down else -1
             n = self.list.count()

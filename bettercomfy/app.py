@@ -1364,13 +1364,29 @@ class Window(QMainWindow):
 
     # ---------------------------------------------------------------- look
     def apply_accent(self):
+        QTimer.singleShot(0, self._apply_accent)    # after the click: the button pressed gets restyled as well
+
+    def _apply_accent(self):
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.setUpdatesEnabled(False)
         T.set_accent(cfg.get("accent"))
         _palette(QApplication.instance())
         QApplication.instance().setStyleSheet(T.qss())
         for pg in ("image", "video"):
             self.pages[pg].bar.refresh_style()
-        for w in QApplication.instance().allWidgets():
-            w.update()
+        self.setUpdatesEnabled(True)
+        QApplication.restoreOverrideCursor()
+        self._fit_counts()
+        self.update()
+
+    def _fit_counts(self):
+        """A new look lays the number boxes out again, with room for arrows they don't have."""
+        def fit():
+            for key in ("image", "video"):
+                c = self.pages[key].bar.count
+                c.lineEdit().setGeometry(0, 0, c.width(), c.height())
+        fit()
+        QTimer.singleShot(60, fit)
 
     # ---------------------------------------------------------------- tray / window
     def _tray(self):
@@ -1394,7 +1410,12 @@ class Window(QMainWindow):
         ExportDialog(self, entries).exec()
 
     def toggle_mode(self):
+        QTimer.singleShot(0, self._toggle_mode)     # after the click: the button pressed gets restyled as well
+
+    def _toggle_mode(self):
         """Light or dark, at once and for good."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.setUpdatesEnabled(False)
         mode = "dark" if T.MODE == "light" else "light"
         cfg.set("ui_mode", mode)
         T.set_mode(mode)
@@ -1408,12 +1429,16 @@ class Window(QMainWindow):
                 w.setIcon(icons.icon(ic[0], ic[1], 18))
         self.top.mode_btn.setIcon(icons.icon("sun" if mode == "dark" else "moon", "#A1A1AA", 18))
         self.top.mode_btn.setProperty("_icon", ["sun" if mode == "dark" else "moon", "#A1A1AA"])
-        for pg in self.pages.values():
-            if hasattr(pg, "_icons"):
-                pg._icons.clear()
+        for key in ("loras", "models"):         # their placeholders have the page's colour; the gallery's are pictures
+            pg = self.pages[key]
+            pg._icons.clear()
+            if pg.isVisible():
                 pg.fill()
-        for w in app.allWidgets():
-            w.update()
+        self.backdrop.rebuild()
+        self.setUpdatesEnabled(True)
+        QApplication.restoreOverrideCursor()
+        self._fit_counts()
+        self.update()
 
     def set_backdrop(self, kind):
         cfg.set("backdrop", kind)
@@ -1603,7 +1628,8 @@ class WheelGuard(QObject):
 
 def _palette(app):
     """A dark base under the stylesheet - nothing ever flashes white."""
-    app.setStyle(QStyleFactory.create("Fusion"))
+    if not isinstance(app.style(), type(None)) and app.style().objectName().lower() != "fusion":
+        app.setStyle(QStyleFactory.create("Fusion"))
     pal = QPalette()
     for role, col in ((QPalette.ColorRole.Window, T.BG), (QPalette.ColorRole.WindowText, T.TEXT),
                       (QPalette.ColorRole.Base, T.FIELD), (QPalette.ColorRole.AlternateBase, T.SURFACE),
