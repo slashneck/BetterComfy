@@ -114,7 +114,7 @@ class AddonDialog(QDialog):
 
 class CharactersPage(QWidget):
     title = "Characters"
-    subtitle = "Your characters: pick one on the Image page and it appears in any scene"
+    subtitle = "Work in progress  ·  Your characters: pick one on the Image page and it appears in any scene"
 
     def __init__(self, app):
         super().__init__()

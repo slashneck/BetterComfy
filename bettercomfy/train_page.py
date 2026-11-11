@@ -66,7 +66,7 @@ def graph(ckpt, folder, steps, rank, prefix):
 
 class TrainPage(QWidget):
     title = "Train"
-    subtitle = "Train a LoRA of your own from pictures, on your own PC"
+    subtitle = "Work in progress  ·  Train a LoRA of your own from pictures, on your own PC"
     _prog = Signal(float, str)
     _end = Signal(object)
 
@@ -87,9 +87,11 @@ class TrainPage(QWidget):
         self.drop.changed.connect(lambda path: path and self._add([path]))
         self.drop.many.connect(self._add)
         lv.addWidget(self.drop)
+        self._hint = label("Different poses and angles work best; 10 to 30 pictures are plenty.", "Faint")
+        self._hint.setObjectName("Note")
         lv.addWidget(hrow(button("Add a folder…", self._folder, "Ghost", "plus"),
                           button("Clear", self._clear, "Ghost", "trash"), None,
-                          label("Different poses and angles work best; 10 to 30 pictures are plenty.", "Faint"), spacing=6))
+                          self._hint, spacing=6))
         self.grid = QListWidget()
         self.grid.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid.setResizeMode(QListWidget.ResizeMode.Adjust)

@@ -7,8 +7,10 @@ from .widgets import Scroll, button, hrow, label
 
 NOTES = {
     "1.5.0": [
-        ("Characters", "Make a character from a few pictures, pick it on the Image page and put it in any scene."),
-        ("Train", "Train a LoRA of your own from pictures, right in the app."),
+        ("Characters (work in progress)", "Make a character from a few pictures, pick it on the Image page and put "
+                                          "it in any scene. It works, but isn't finished yet."),
+        ("Train (work in progress)", "Train a LoRA of your own from pictures, right in the app. It works, but isn't "
+                                     "finished yet, and training takes a long time on most graphics cards."),
         ("Storage", "A new tab that shows what takes up space. Delete, move or compress big pictures and videos."),
         ("Duplicates", "Finds look-alike pictures without AI and stacks them. Nothing is deleted: go through a stack, "
                        "keep what you want, mark the rest."),

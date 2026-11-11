@@ -44,11 +44,11 @@ any picture bigger and sharper with its own model, prompt and seed, or just enla
 **Compare.** The same picture with one setting changed (seeds, guidance, steps, sampler, scheduler, preset, LoRA
 strength or model), side by side.
 
-**Characters.** Make a character from a few pictures of it and keep it in its own tab. On the Image page you pick it
+**Characters (work in progress).** Make a character from a few pictures of it and keep it in its own tab. On the Image page you pick it
 from a row of previews, say how close it should stay (free to 1-to-1) and it appears in whatever scene you write. It uses
 the LoRA you trained for it, its pictures through the optional Character reference add-on, or both.
 
-**Train.** Train a LoRA of your own in one tab: drop in pictures, give it a name and a trigger word, pick a model and
+**Train (work in progress).** Train a LoRA of your own in one tab: drop in pictures, give it a name and a trigger word, pick a model and
 press Start. It uses the training built into ComfyUI, so nothing extra is needed, and the result lands in your LoRA library
 and as a character. It works with SDXL, Pony, Illustrious and SD 1.5 models.
 

@@ -39,6 +39,7 @@ GROUPS = [("Create", [("image", "Image", "image"), ("video", "Video", "video")])
           ("Custom", [("characters", "Characters", "person"), ("train", "Train", "dumbbell")])]
 PAGES = [it for _g, items in GROUPS for it in items]
 BOTTOM = [("settings", "Settings", "settings")]
+WORK_IN_PROGRESS = ("characters", "train")         # tabs that work but aren't finished
 UNDO_MS = 8000                                      # how long a delete can still be taken back
 
 
@@ -192,6 +193,8 @@ class Window(QMainWindow):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
         self.rail = NavRail(GROUPS, BOTTOM)
+        for key in WORK_IN_PROGRESS:
+            self.rail.mark(key, "WIP", "work in progress: it works, but isn't finished yet")
         self.rail.changed.connect(self.go)
         h.addWidget(self.rail)
         main = QWidget()

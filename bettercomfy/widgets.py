@@ -1558,12 +1558,14 @@ class _Swap(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)                         # no background of its own: what is behind the pages stays
         t = self.t
-        out = min(1.0, t * 1.6)                    # the old page is gone a bit before the new one settles
+        # one after the other, hardly overlapping: two see-through pages over each other would smear
+        out = min(1.0, t * 2.4)
         if out < 1.0:
             p.setOpacity(1.0 - out)
-            p.drawPixmap(QPointF(0, -10 * out), self.old)
-        p.setOpacity(t)
-        p.drawPixmap(QPointF(0, 18 * (1.0 - t)), self.new)
+            p.drawPixmap(QPointF(0, -6 * out), self.old)
+        come = max(0.0, (t - 0.3) / 0.7)
+        p.setOpacity(come)
+        p.drawPixmap(QPointF(0, 10 * (1.0 - come)), self.new)
         p.end()
 
 
@@ -1574,6 +1576,7 @@ class FadeStack(QStackedWidget):
         super().__init__()
         self._ov = None
         self._anim = None
+        self._waiting = None
 
     @staticmethod
     def _snap(w):
@@ -1595,11 +1598,16 @@ class FadeStack(QStackedWidget):
             self._anim.stop()
             self._ov.deleteLater()
             self._ov = None
+            if self._waiting is not None:
+                QWidget.setVisible(self._waiting, True)     # (some pages have a show() of their own)
         old = self._snap(self.currentWidget())
         self.setCurrentIndex(i)
         new_w = self.currentWidget()
         new_w.resize(self.size())
         new = self._snap(new_w)
+        # the pictures are see-through (a moving background stays): the real page waits hidden, or it would show twice
+        QWidget.setVisible(new_w, False)
+        self._waiting = new_w
         ov = _Swap(self, old, new)
         ov.setGeometry(self.rect())
         ov.show()
@@ -1612,10 +1620,12 @@ class FadeStack(QStackedWidget):
         a.setEasingCurve(QEasingCurve.Type.OutCubic)
         a.valueChanged.connect(ov.set_t)
 
-        def done(ov=ov):
+        def done(ov=ov, page=new_w):
             ov.deleteLater()
             if self._ov is ov:
                 self._ov = None
+                QWidget.setVisible(page, True)
+                self._waiting = None
         a.finished.connect(done)
         self._anim = a
         a.start()
@@ -1646,6 +1656,7 @@ class NavButton(QAbstractButton):
     def __init__(self, key, text, icon_name):
         super().__init__()
         self.key, self.text_, self.icon_name = key, text, icon_name
+        self.tag = ""
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(72, 60)
@@ -1690,6 +1701,16 @@ class NavButton(QAbstractButton):
         p.setFont(f)
         p.setPen(col)
         p.drawText(QRectF(0, 35, self.width(), 16), Qt.AlignmentFlag.AlignCenter, self.text_)
+        if self.tag:                            # a small pill: this part isn't finished yet
+            f.setPixelSize(8)
+            f.setWeight(QFont.Weight.Bold)
+            p.setFont(f)
+            pill = QRectF(self.width() / 2 + 4, 4, 26, 13)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(T.col(T.WARN))
+            p.drawRoundedRect(pill, 6.5, 6.5)
+            p.setPen(QColor("#1A1300"))
+            p.drawText(pill, Qt.AlignmentFlag.AlignCenter, self.tag)
         p.end()
 
 
@@ -1799,6 +1820,13 @@ class NavRail(QWidget):
         self._a.setDuration(280)
         self._a.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._a.valueChanged.connect(lambda v: (setattr(self, "_y", float(v)), self.update()))
+
+    def mark(self, key, tag, tip):
+        """A small tag on a tab, e.g. for one that is still being worked on."""
+        b = self.btns[key]
+        b.tag = tag
+        b.setToolTip(f"{b.text_}  ·  {tip}")
+        b.update()
 
     def refresh_logo(self):
         pm = logo_pixmap()
