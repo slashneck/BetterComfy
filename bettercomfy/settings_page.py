@@ -3,13 +3,14 @@ import os
 import threading
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPixmap
-from PySide6.QtWidgets import QColorDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
+from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPixmap
+from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QKeySequenceEdit, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
     QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from . import comfy, icons, system, theme as T
 from .config import APP_NAME, BASE, VERSION, cfg, resource
 from .queue_page import AFTER
+from .quick import ConnectionLog, Shortcuts
 from .widgets import (ChipBox, Combo, Card, Scroll, Segmented, Slider, ToggleRow, button, chip, field, hrow, label,
                       set_combo, vcol)
 
@@ -254,6 +255,13 @@ class SettingsPage(QWidget):
                                                                      "in ComfyUI's cache. The models load again for "
                                                                      "the next job.",
                         cfg.get("comfy_forget_private", True), lambda v: cfg.set("comfy_forget_private", v)))
+        self.panic_edit = QKeySequenceEdit(QKeySequence(cfg.get("panic_key") or ""))
+        self.panic_edit.setMaximumSequenceLength(1)
+        self.panic_edit.editingFinished.connect(self._panic_key)
+        c.add(field("Panic key", hrow(self.panic_edit, button("Clear", self._panic_clear, "Ghost"), spacing=6),
+                    "Works everywhere, even in a game: hides Better Comfy and locks the vault. Press it again to bring "
+                    "the window back.", label_w=90))
+        c.add(hrow(button("Connection log…", lambda: ConnectionLog(self).exec(), "Ghost", "info"), None))
         self.pc_report = label("", None, wrap=True)
         self.pc_report.setTextFormat(Qt.TextFormat.RichText)
         self.pc_check = button("Check again", self._check_pc, "Ghost", "refresh")
@@ -405,6 +413,11 @@ class SettingsPage(QWidget):
         sh.addWidget(custom)
         sh.addStretch(1)
         c.add(field("Accent", sw, label_w=90))
+        self.ui_scale = Slider(80, 150, 5, 0, float(cfg.get("ui_scale") or 100), self._ui_scale, suffix=" %", width=80)
+        scale_chips = ChipBox(4)
+        for text, v in (("Small", 90), ("Default", 100), ("Large", 115), ("Extra large", 130)):
+            scale_chips.add(chip(text, lambda _=False, v=v: (self.ui_scale.set(v), self._ui_scale(v)), False))
+        c.add(field("Interface size", self.ui_scale, "Applies the next time Better Comfy opens.", label_w=90), scale_chips)
         c.add(ToggleRow("Animations", "Smooth transitions, sliding controls, fades", cfg.get("animations"),
                         lambda v: cfg.set("animations", v)))
         self.start_page = Combo()
@@ -442,6 +455,8 @@ class SettingsPage(QWidget):
                         cfg.get("close_to_tray"), lambda v: cfg.set("close_to_tray", v)),
               ToggleRow("Ask before deleting", "Deleted results go to the recycle bin either way",
                         cfg.get("confirm_delete"), lambda v: cfg.set("confirm_delete", v)))
+        c.add(hrow(button("Back up…", self._backup, "Ghost", "download"), button("Restore…", self._restore, "Ghost", "upload"),
+                   button("Shortcuts", lambda: Shortcuts(self).exec(), "Ghost", "info"), None, spacing=6))
         c.add(hrow(button("App data folder", lambda: system.open_folder(BASE), "Ghost", "folder"), None,
                    button("Reset settings", self._reset, "Danger"), spacing=6))
         cards.add(c)
@@ -1154,6 +1169,63 @@ class SettingsPage(QWidget):
 
     def sync_after(self):
         set_combo(self.after, cfg.get("after_queue"))
+
+    def _panic_key(self):
+        text = self.panic_edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText)
+        if self.app.global_key.bind(text):
+            cfg.set("panic_key", text)
+            if text:
+                self.app.toast(f"Panic key: {text}", "ok")
+        else:
+            self.panic_edit.setKeySequence(QKeySequence(cfg.get("panic_key") or ""))
+            self.app.global_key.bind(cfg.get("panic_key") or "")
+            self.app.toast("That one can't be used: add Ctrl, Alt or Shift, or another program already has it.", "warn")
+
+    def _panic_clear(self):
+        self.panic_edit.clear()
+        self.app.global_key.clear()
+        cfg.set("panic_key", "")
+
+    def _ui_scale(self, v):
+        cfg.set("ui_scale", int(v))
+        self.app.toast("The new size applies the next time Better Comfy opens.", "info")
+
+    def _backup(self):
+        import time
+        from . import backup
+        path, _f = QFileDialog.getSaveFileName(self, "Back up", f"BetterComfy-backup-{time.strftime('%Y-%m-%d')}.zip",
+                                               "Zip (*.zip)")
+        if not path:
+            return
+        box = QMessageBox(QMessageBox.Icon.Question, "Back up",
+                          "Your settings, presets, notes and characters go into one zip. Pictures, videos and the vault "
+                          "are never in it.", QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel, self)
+        more = QCheckBox("Also the gallery list and prompt history (readable by anyone who has the zip)")
+        box.setCheckBox(more)
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return
+        try:
+            n = backup.create(path, more.isChecked())
+            self.app.toast(f"Backup saved ({n} files).", "ok")
+        except OSError as ex:
+            QMessageBox.warning(self, "Back up", f"That didn't work:\n{ex}")
+
+    def _restore(self):
+        from . import backup
+        path, _f = QFileDialog.getOpenFileName(self, "Restore", "", "Zip (*.zip)")
+        if not path:
+            return
+        try:
+            info = backup.check(path)
+        except ValueError as ex:
+            QMessageBox.warning(self, "Restore", str(ex))
+            return
+        if QMessageBox.question(self, "Restore", f"Bring back this backup ({info['files']} files)? It replaces your current "
+                                                 "settings, presets, notes and characters the next time Better Comfy "
+                                                 "opens.") != QMessageBox.StandardButton.Yes:
+            return
+        backup.restore(path)
+        self.app.toast("Done. Close and reopen Better Comfy to finish.", "ok")
 
     def _paint_swatches(self):
         cur = QColor(cfg.get("accent")).name().lower()

@@ -149,7 +149,33 @@ class Card(QFrame):
                     h.addWidget(r)
             self.head = head
             v.addWidget(head)
-        self.body = v
+            self.content = QWidget()    # what folds away; what is hidden inside it stays as it was
+            cv = QVBoxLayout(self.content)
+            cv.setContentsMargins(0, 0, 0, 0)
+            cv.setSpacing(spacing)
+            v.addWidget(self.content, 1)
+            self.body = cv
+        else:
+            self.body = v
+        self._fold_key = None
+        self._folded = False
+
+    def foldable(self, key):
+        """Click the title to fold the card away; remembered."""
+        self._fold_key = key
+        self._chev = QLabel()
+        self.head.layout().addWidget(self._chev)
+        self.head.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.head.mousePressEvent = lambda _e: self.set_folded(not self._folded)
+        self.set_folded(key in (cfg.get("cards_folded") or []), save=False)
+
+    def set_folded(self, on, save=True):
+        self._folded = on
+        self.content.setVisible(not on)
+        self._chev.setPixmap(icons.pixmap("chevron_r" if on else "chevron", 14, "#62626B"))
+        if save:
+            folded = [k for k in cfg.get("cards_folded") or [] if k != self._fold_key]
+            cfg.set("cards_folded", folded + [self._fold_key] if on else folded)
 
     def add(self, *ws, stretch=0):
         for w in ws:
@@ -206,6 +232,13 @@ class Scroll(QScrollArea):
 
     def end(self):
         self.lay.addStretch(1)
+
+    def fold_cards(self, prefix):
+        """Every titled card in this column can be folded away."""
+        for i in range(self.lay.count()):
+            w = self.lay.itemAt(i).widget()
+            if isinstance(w, Card) and getattr(w, "title", None) is not None:
+                w.foldable(f"{prefix}.{w.title.text().lower()}")
 
 
 # ------------------------------------------------------------------------------------------------ toggle

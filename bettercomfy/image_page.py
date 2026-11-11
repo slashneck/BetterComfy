@@ -107,7 +107,7 @@ class ImagePage(QWidget):
         self.prompt.submit.connect(lambda: self.generate(self.bar.count.value()))
         self.prompt.style_fn = lambda: assistant.style_for(W.family_of(self.p, self._kind()))
         self.quality_tags = ToggleRow("Quality words", "", True, lambda v: self._set("quality_tags", v))
-        self.prompt.body.insertWidget(3, self.quality_tags)       # after the prompt, the helper panel and the tips
+        self.prompt.body.insertWidget(2, self.quality_tags)       # after the prompt, the helper panel and the tips
         sc.add(self.prompt)
 
         # loras
@@ -233,6 +233,7 @@ class ImagePage(QWidget):
         c.add(self.seed, self.init_box)
         sc.add(c)
         sc.end()
+        sc.fold_cards("image")
         h.addWidget(side)
 
         # ---------------------------------------------------------------- the picture
@@ -269,6 +270,10 @@ class ImagePage(QWidget):
                  "hires_scale", "loras", "init_image", "sampler", "scheduler"):
             self._update()
         self._save_timer.start()
+
+    def use_model(self, name, src="ckpt"):
+        set_combo(self.ckpt, f"{src}|{name}")
+        self.app.go("image")
 
     def app_go(self, key):
         self.app.go(key)

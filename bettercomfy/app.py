@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstract
                                QMainWindow, QScrollArea, QSlider, QStyleFactory, QMenu, QMessageBox,
                                QSystemTrayIcon, QVBoxLayout, QWidget)
 
-from . import comfy, icons, media, system, theme as T
+from . import comfy, icons, media, netlog, system, theme as T
 from .config import APP_ID, APP_NAME, BASE, VERSION, cfg, resource
 from .gallery_page import GalleryPage
 from .history import History
@@ -27,6 +27,8 @@ from .queue_page import QueuePage
 from .settings_page import SettingsPage
 from .vault import vault
 from .video_page import VideoPage
+from .hotkey import GlobalKey
+from .quick import QuickSearch, Shortcuts
 from .widgets import FadeStack, NavRail, PulseDot, Ring, Toasts, button, human_time, label
 
 GROUPS = [("Create", [("image", "Image", "image"), ("video", "Video", "video")]),
@@ -217,6 +219,11 @@ class Window(QMainWindow):
         self._views = []
         for i, (k, _t, _i) in enumerate(PAGES + BOTTOM):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda k=k: self.go(k))
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self.quick_search)
+        QShortcut(QKeySequence("F1"), self, activated=lambda: Shortcuts(self).exec())
+        self._panicked = False
+        self.global_key = GlobalKey(QApplication.instance(), self.panic)
+        self.global_key.bind(cfg.get("panic_key") or "")
         self._tray()
         self._restore()
         self.go(cfg.get("start_page") or "image", animate=False)
@@ -1336,6 +1343,29 @@ class Window(QMainWindow):
         self.tray.activated.connect(lambda r: self._show() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
         self.tray.show()
 
+    def quick_search(self):
+        QuickSearch(self).exec()
+
+    def panic(self):
+        """The panic key: everything out of sight and the vault locked. Pressed again, the window comes back."""
+        if self._panicked:
+            self._panicked = False
+            if self.tray:
+                self.tray.show()
+            self._show()
+            return
+        self._panicked = True
+        self.lock_vault(quiet=True)
+        for w in QApplication.topLevelWidgets():
+            if w is not self and w.isVisible() and w.isWindow():
+                if isinstance(w, QDialog):
+                    w.reject()
+                else:
+                    w.hide()
+        self.hide()
+        if self.tray:
+            self.tray.hide()
+
     def _show(self):
         self.showNormal()
         self.raise_()
@@ -1560,6 +1590,9 @@ def main():
     from . import updater
     argv = sys.argv[1:]
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    netlog.start()
+    if int(cfg.get("ui_scale") or 100) != 100:
+        os.environ["QT_SCALE_FACTOR"] = str(int(cfg.get("ui_scale")) / 100)
     comfy.quiet_errors()
     system.app_user_model_id()
     app = QApplication(sys.argv)

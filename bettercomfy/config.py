@@ -1,5 +1,6 @@
 """Better Comfy's own settings and data folder (%LOCALAPPDATA%/BetterComfy). Plain JSON, written atomically."""
 import copy
+import shutil
 import json
 import os
 import sys
@@ -14,6 +15,35 @@ REPO_URL = "https://github.com/" + REPO
 BASE = os.environ.get("BETTERCOMFY_DATA_DIR") or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
                                                              APP_ID)
 _FILE = os.path.join(BASE, "settings.json")
+RESTORE_DIR = os.path.join(BASE, "restore-pending")
+
+
+def _apply_restore():
+    """A backup that was picked last time goes into place now, while nothing has these files open."""
+    if not os.path.isdir(RESTORE_DIR):
+        return
+    for root, _dirs, files in os.walk(RESTORE_DIR):
+        for f in files:
+            src = os.path.join(root, f)
+            dst = os.path.join(BASE, os.path.relpath(src, RESTORE_DIR))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            os.replace(src, dst)
+    shutil.rmtree(RESTORE_DIR, ignore_errors=True)
+    # a character's pictures are listed with their full path, which may be another one now
+    p = os.path.join(BASE, "characters.json")
+    try:
+        with open(p, encoding="utf-8") as fh:
+            chars = json.load(fh)
+        for c in chars:
+            c["refs"] = [os.path.join(BASE, "characters", c["id"], os.path.basename(r.replace("\\", "/")))
+                         for r in c.get("refs") or []]
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(chars, fh, ensure_ascii=False, indent=1)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+
+_apply_restore()
 
 
 def _home_dir(*parts):
@@ -60,6 +90,10 @@ DEFAULTS = {
     "market_favs": [],
     "civitai_key": None,              # the optional API key, encrypted for this Windows account (DPAPI)
     "stores": [],                     # drives for pictures and vault files: [{id, path, serial, label, kind}]
+    "cards_folded": [],               # the cards folded away on the Image and Video pages
+    "nav_folded": [],                 # the groups folded away in the left rail
+    "panic_key": "",                  # the key combination that hides the app and locks the vault
+    "ui_scale": 100,                  # size of the whole interface, in percent (applies at the next start)
     "clean_start": True,              # each start with an empty prompt and result strip (the gallery keeps all)
     "train_speed": {},                # seconds a training step took, by picture size
     "addon_files": [],                # files the Character reference add-on brought (they go with it)

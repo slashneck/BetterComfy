@@ -250,6 +250,17 @@ class LorasPage(QWidget):
         item.setText(f"{info['line']}  ·  {info['name']}")
         item.setToolTip(f"{info['name']}\n{info['detail']}")
 
+    def show_name(self, name):
+        """Opens the library on this LoRA."""
+        self._switch("lib")
+        self.search.clear()
+        self.fill()
+        for i in range(self.grid.count()):
+            if self.grid.item(i).data(Qt.ItemDataRole.UserRole) == name:
+                self.grid.setCurrentRow(i)
+                self.grid.scrollToItem(self.grid.item(i))
+                return
+
     def _models_changed(self, _lists):
         if self.market is not None:
             self.market.finishing.clear()       # the new files are in the list now

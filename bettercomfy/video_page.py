@@ -208,6 +208,7 @@ class VideoPage(QWidget):
         c.add(self.models_box, self.tune, field("Seed", self.seed, label_w=40))
         sc.add(c)
         sc.end()
+        sc.fold_cards("video")
         h.addWidget(side)
 
         self.pane = ResultPane("video", self.history, [
