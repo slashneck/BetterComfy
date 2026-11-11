@@ -4,10 +4,11 @@ Comfy\\Dot art is offered as a Dot art background of its own."""
 import math
 import os
 import random
+import threading
 
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF, QRegion
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF, QRadialGradient, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
 from . import theme as T
@@ -16,9 +17,11 @@ KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code"
 ART_DIR = os.path.join(os.path.expanduser("~"), "Pictures", "Better Comfy", "Dot art")     # pictures for Dot art, if any
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
-DENSITY = 0.1                           # dots per pixel where a picture is at its brightest
-_LAYERS = 8                             # groups of dots that move separately
+DENSITY = 0.42                          # particles per pixel of the picture
+_LAYERS = 8                             # groups of particles that move separately (and 2 more for the loose ones)
 _DRIFT = 2                              # how many pixels they wander
+_DRIFT_LOOSE = 7                        # the loose ones around the edges wander further
+_PAD = 40                               # room around the picture for the haze
 _LINE = 0.075                           # up to this brightness a thin stroke counts as an outline
 _COLOURED = 0.34                        # from this saturation on, a place in the picture counts as having colour
 _CITY_TOP = 230                         # pixels from the top of the window that the city leaves free
@@ -54,59 +57,102 @@ def _broad_dark(shade):
     return _window_sum(total == area, 9)[0] > 0
 
 
-def stipple(img, height, invert=False, detail=1.0):
-    """The dots on a canvas of that height, as (xs, ys, colours, widths): bright places get bigger dots, and as many in a place as it is bright (or dark, for a light
-    theme). Colours: 0 for a plain dot, else the softened 0xRRGGBB where the picture is red; blue goes dark. detail: below 1
-    for a small picture, which has less to show and gets fewer dots."""
-    view = img.convertToFormat(QImage.Format.Format_Grayscale8)
+def particles(img, height, light=False, detail=1.0):
+    """The picture as particles: (xs, ys, colours 0..1, energies 0..1, scattered). Each takes its colour from the picture and a
+    brightness of its own; only outlines and the background stay empty, and some drift off the edges as haze."""
     colour = img.convertToFormat(QImage.Format.Format_RGB888)       # stays alive while the array below reads from it
     rows = np.frombuffer(colour.constBits(), np.uint8).reshape(colour.height(), colour.bytesPerLine())
-    rgb = rows[:, :colour.width() * 3].reshape(view.height(), view.width(), 3).astype(np.float32)
-    lum = np.frombuffer(view.constBits(), np.uint8).reshape(view.height(), view.bytesPerLine())[:, :view.width()] / 255
-    lo, hi = np.percentile(lum, (2, 98))        # any picture uses the whole range, from no dots to many
-    lum = np.clip((lum - lo) / max(hi - lo, 0.01), 0, 1)
-    scale = height / view.height()
+    rgb = rows[:, :colour.width() * 3].reshape(colour.height(), colour.width(), 3).astype(np.float32) / 255
+    h, w = rgb.shape[:2]
+    full = rgb.mean(axis=2)
+    scale = height / h
     rng = np.random.default_rng(7)
-    # one try per small cell of an even grid, somewhere inside the cell: no clumps, so lines stay clean
     step = 1 / (scale * math.sqrt(DENSITY * detail))
-    gx, gy = np.meshgrid(np.arange(0, view.width(), step), np.arange(0, view.height(), step))
+    gx, gy = np.meshgrid(np.arange(0, w, step), np.arange(0, h, step))
     gx, gy = gx.ravel(), gy.ravel()
     n = gx.size
-    # (only a little off the grid: calm rather than grainy)
-    x = np.clip(gx + (0.3 + rng.random(n) * 0.4) * step, 0, view.width() - 1)
-    y = np.clip(gy + (0.3 + rng.random(n) * 0.4) * step, 0, view.height() - 1)
-    v = lum[y.astype(int), x.astype(int)]
-    if invert:
-        v = np.where(v > 0.01, 1 - v, 0)
-    # how much colour each place has; coloured places keep their dots even when they are darkish
-    c = rgb[y.astype(int), x.astype(int)]
-    top = c.max(axis=1)
-    sat = np.where(top > 40, (top - c.min(axis=1)) / np.maximum(top, 1), 0)
-    red = (sat > _COLOURED) & (c[:, 0] > c[:, 1] * 1.35) & (c[:, 0] > c[:, 2] * 1.25)
-    # tones show as shades of grey as well as by how many dots there are: skin and dark clothes stay apart, and only
-    # the outlines and the background are really black
-    shade = c.mean(axis=1) / 255
-    if not invert:
-        v = np.where(shade > _LINE, 0.34 + 0.66 * shade ** 0.9, 0)
-        broad = _broad_dark(rgb.mean(axis=2) / 255)[y.astype(int), x.astype(int)]
-        v = np.where(broad, 0.3, v)     # a dark grey instead of a black hole
-        shade = np.where(broad, 0.13, shade)
-    v = np.maximum(v, np.where(red, 0.62, 0))
-    keep = v ** 0.8 > rng.random(n)
-    # softened: a little towards grey and never too dark to see; in steps, so few pens are needed
-    soft = c[keep] * 0.78 + c[keep].mean(axis=1, keepdims=True) * 0.22
-    soft = np.clip(soft * (190 / np.maximum(soft.max(axis=1, keepdims=True), 1)), 0, 255).astype(np.uint32) & 0xE0
-    tint = (soft[:, 0] << 16) | (soft[:, 1] << 8) | soft[:, 2]
-    grey = 0
-    if not invert:
-        level = (70 + 185 * shade[keep] ** 0.75).astype(np.uint32) & 0xF0 | 0x0F
-        grey = level * 0x10101
-    widths = np.round((1.5 + 2.2 * v[keep]) * 2) / 2        # in half pixels, so few pens are needed
-    return x[keep] * scale, y[keep] * scale, np.where(red[keep], tint, grey), widths
+    x = np.clip(gx + rng.random(n) * step, 0, w - 1)
+    y = np.clip(gy + rng.random(n) * step, 0, h - 1)
+    ix, iy = x.astype(int), y.astype(int)
+    c = rgb[iy, ix]
+    shade = full[iy, ix]
+    figure = shade > 0.012
+    broad = _broad_dark(full)[iy, ix]
+    outline = figure & (shade <= _LINE) & ~broad
+    keep = figure & ~(outline & (rng.random(n) > 0.06))
+    x, y, c, shade, broad = x[keep], y[keep], c[keep], shade[keep], broad[keep]
+    n = x.size
+    c = c * 0.86 + c.mean(axis=1, keepdims=True) * 0.14      # the picture's own colours, a touch softer
+    # shadows lifted so that dark clothes stay readable
+    tone = np.where(broad, 0.3, shade ** 0.72)
+    c = np.clip(c * (tone / np.maximum(shade, 0.05))[:, None], 0, 1)
+    # brightening a shadow would blow up its tint: the darker it was, the closer to grey it comes out
+    keep_colour = np.clip((shade - 0.08) / 0.3, 0, 1)[:, None]
+    c = c * keep_colour + c.mean(axis=1, keepdims=True) * (1 - keep_colour)
+    sparkle = 0.28 + 0.72 * rng.random(n) ** 1.4
+    energy = sparkle * (0.5 + 0.5 * tone)
+    if light:
+        c, energy = c * 0.45, sparkle * (0.2 + 0.8 * (1 - tone))
+    # the haze: particles near an edge of the figure come loose
+    mask = full > 0.012
+    total, area = _window_sum(mask, 45)
+    inside = (total / area)[y.astype(int), x.astype(int)]
+    loose = (inside < 0.82) & (rng.random(n) < 0.34)
+    spread = 7 + 20 * rng.random(n) ** 2
+    x = np.where(loose, x + rng.normal(0, 1, n) * spread / scale, x)
+    y = np.where(loose, y + rng.normal(0, 1, n) * spread / scale, y)
+    energy = np.where(loose, energy * 0.55, energy)
+    return x * scale, y * scale, c, energy, loose
+
+
+def splat(xs, ys, colours, energies, w, h, light):
+    """Soft points on a see-through picture: each shared between the four pixels around it, added up like light."""
+    fx, fy = xs - np.floor(xs), ys - np.floor(ys)
+    x0, y0 = np.floor(xs).astype(int), np.floor(ys).astype(int)
+    sum_rgb, sum_a = np.zeros((h, w, 3), np.float32), np.zeros((h, w), np.float32)
+    for dx, dy, part in ((0, 0, (1 - fx) * (1 - fy)), (1, 0, fx * (1 - fy)), (0, 1, (1 - fx) * fy), (1, 1, fx * fy)):
+        px, py = x0 + dx, y0 + dy
+        ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
+        weight = (energies * part)[ok]
+        np.add.at(sum_a, (py[ok], px[ok]), weight)
+        np.add.at(sum_rgb, (py[ok], px[ok]), colours[ok] * weight[:, None])
+    gain = 2.7
+    rgb = np.clip(sum_rgb * gain, 0, 1)
+    alpha = np.clip(sum_a * gain, 0, 1) if light else rgb.max(axis=2)
+    if light:
+        rgb = np.minimum(rgb, alpha[:, :, None])
+    out = np.dstack((rgb[:, :, 2], rgb[:, :, 1], rgb[:, :, 0], alpha))
+    return QImage((out * 255).astype(np.uint8).tobytes(), w, h, 4 * w, QImage.Format.Format_ARGB32_Premultiplied).copy()
+
+
+def compute_art(path, w, h, light):
+    """Everything that takes a moment, away from the window: the finished layers as images."""
+    img = QImage(path)
+    if img.isNull():
+        return None
+    detail = min(1.0, img.height() / 800) ** 0.55
+    img = img.scaledToHeight(900, Qt.TransformationMode.SmoothTransformation)
+    size = max(1, int(h * 0.97))
+    xs, ys, colours, energies, loose = particles(img, size, light, detail)
+    art_w = size * img.width() / img.height()
+    ox, oy = max(0, min(w - art_w, w * 0.64 - art_w / 2)), h - size
+    bw, bh = int(art_w) + 2 * _PAD, size + 2 * _PAD
+    rng = np.random.default_rng(3)
+    # most particles on layers that hardly move; the loose ones on their own, which wander further
+    layer = np.where(loose, _LAYERS + rng.integers(0, 2, xs.size), rng.integers(0, _LAYERS, xs.size))
+    images = []
+    for n in range(_LAYERS + 2):
+        pick = layer == n
+        images.append(splat(xs[pick] + _PAD, ys[pick] + _PAD, colours[pick], energies[pick], bw, bh, light))
+    mask = img.scaled(int(art_w) // 8 + 1, size // 8 + 1).convertToFormat(QImage.Format.Format_Grayscale8)
+    return {"images": images, "size": (bw, bh), "origin": (int(ox) - _PAD, int(oy) - _PAD), "box": (ox, oy, art_w, size),
+            "mask": mask, "count": int(xs.size)}
 
 
 # ------------------------------------------------------------------------------------------------ the widget
 class Backdrop(QWidget):
+    _art_done = Signal(int, object)
+
     def __init__(self, parent):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -116,7 +162,11 @@ class Backdrop(QWidget):
         self.points = []
         self.base = None                # what doesn't change: drawn once, then only copied
         self.art_layers = []            # dot art: the dots in groups that drift separately
-        self.art_xs = self.art_ys = self.art_red = None
+        self.art_count = 0
+        self.art_gen = 0                # which build of the picture is wanted; older ones arriving late are dropped
+        self.art_busy = -1
+        self.art_ready = -1
+        self._art_done.connect(self._use_art)
         self.art_origin = QPoint(0, 0)
         self.art_t = 0.0
         self.city = []
@@ -137,16 +187,19 @@ class Backdrop(QWidget):
             kind = "art" if self.art_file else "none"
         self.kind = kind
         self.points = []
+        self.base = None
+        self.art_layers = []
         self.rebuild()
         self._run()
         self.update()
 
     def rebuild(self):
         """After a change of size or look."""
-        self.base = None
+        if self.kind != "art":
+            self.base = None
         self.city = []
         self.falling = []
-        self.art_layers = []
+        self.art_gen += 1                       # (the dot art stays up until its new version is ready)
         self.update()
 
     def resizeEvent(self, e):
@@ -416,65 +469,62 @@ class Backdrop(QWidget):
 
     # ---- dot art
     def _build_art(self):
-        """The dots, sorted onto a few see-through layers. Each layer drifts and breathes on its own, which is cheap: only
-        whole layers move, and a page scrolling over them only copies the finished picture."""
-        w, h = self.width(), self.height()
+        """All at once (for tests); the window itself uses _start_art."""
+        self._use_art(self.art_gen, compute_art(self.art_file, self.width(), self.height(), T.MODE == "light"))
+
+    def _start_art(self):
+        """The particles are worked out beside the window, which keeps responding meanwhile."""
+        if self.art_busy == self.art_gen:
+            return
+        self.art_busy = self.art_gen
+        job = (self.art_gen, self.art_file, self.width(), self.height(), T.MODE == "light")
+
+        def work():
+            try:
+                res = compute_art(*job[1:])
+            except Exception:
+                res = None
+            try:
+                self._art_done.emit(job[0], res)
+            except RuntimeError:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _use_art(self, gen, res):
+        if gen != self.art_gen:
+            return
+        self.art_ready = gen
         self.base = QPixmap(1, 1)
         self.base.fill(Qt.GlobalColor.transparent)
         self.art_layers = []
-        self.art_xs = np.empty(0)
-        self.dot_col = QColor(T.col(T.TEXT if T.MODE == "dark" else T.TEXT2))
-        img = QImage(self.art_file)
-        if img.isNull():
+        self.art_count = 0
+        if res is None:
+            self.update()
             return
-        detail = min(1.0, img.height() / 800) ** 0.55
-        img = img.scaledToHeight(900, Qt.TransformationMode.SmoothTransformation)
-        size = max(1, int(h * 0.97))
-        xs, ys, tints, widths = stipple(img, size, T.MODE == "light", detail)
-        art_w = size * img.width() / img.height()
-        ox, oy = max(0, min(w - art_w, w * 0.64 - art_w / 2)), h - size
-        bw, bh = int(art_w) + 2 * _DRIFT + 2, size + 2 * _DRIFT + 2
-        rng = np.random.default_rng(3)
-        layer = rng.integers(0, _LAYERS, xs.size)
-        for n in range(_LAYERS):
-            pm = QPixmap(bw, bh)
-            pm.fill(Qt.GlobalColor.transparent)
-            q = QPainter(pm)
-            q.setRenderHint(QPainter.RenderHint.Antialiasing)
-            mine = layer == n
-            for tint in np.unique(tints[mine]).tolist():
-                same = mine & (tints == tint)
-                for width in np.unique(widths[same]).tolist():
-                    poly = QPolygonF()
-                    for x, y in zip((xs[same & (widths == width)] + _DRIFT).tolist(), (ys[same & (widths == width)] + _DRIFT).tolist()):
-                        poly.append(QPointF(x, y))
-                    q.setPen(QPen(QColor(tint | 0xFF000000) if tint else self.dot_col, width, Qt.PenStyle.SolidLine,
-                                  Qt.PenCapStyle.RoundCap))
-                    q.drawPoints(poly)
-            q.end()
-            self.art_layers.append(pm)
-        self.art_xs, self.art_ys, self.art_red = xs + ox, ys + oy, tints != 0
-        if T.MODE == "dark":                    # (greys are colours too here: only real red counts for the glow)
-            self.art_red = np.array([(t >> 16) - (t & 0xFF) > 40 for t in tints.tolist()], bool)
-        self.base = QPixmap(bw, bh)
-        self.art_origin = QPoint(int(ox) - _DRIFT, int(oy) - _DRIFT)
-        self._art_box = QRectF(ox, oy, art_w, size)
-        self._art_mask = img.scaled(int(art_w) // 8 + 1, size // 8 + 1).convertToFormat(QImage.Format.Format_Grayscale8)
-        self._near = None
+        self.art_layers = [QPixmap.fromImage(i) for i in res["images"]]
+        self.art_count = res["count"]
+        self.base = QPixmap(*res["size"])
+        self.art_origin = QPoint(*res["origin"])
+        self._art_box = QRectF(*res["box"])
+        self._art_mask = res["mask"]
         self._art_frame()
+        self.update()
 
     def _art_frame(self):
-        """This moment of the picture: every layer a pixel or two off its place, a little brighter or dimmer."""
-        if not self.art_layers:
+        """This moment of the picture: every layer a little off its place, a little brighter or dimmer."""
+        if not self.art_layers or self.base is None:
             return
         self.base.fill(Qt.GlobalColor.transparent)
         t = self.art_t
         q = QPainter(self.base)
+        if T.MODE == "dark":
+            q.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
         for n, pm in enumerate(self.art_layers):
             phase = n * 2.399                   # spread evenly, so they never move together
-            q.setOpacity(0.84 + 0.16 * math.sin(t * 1.15 + phase * 1.7))
-            q.drawPixmap(round(_DRIFT * 0.5 * (math.sin(t * 0.8 + phase) + math.sin(t * 0.37 + phase * 2.3))),
-                         round(_DRIFT * 0.5 * (math.cos(t * 0.65 + phase * 1.3) + math.sin(t * 0.29 + phase * 0.7))), pm)
+            reach = _DRIFT_LOOSE if n >= _LAYERS else _DRIFT
+            q.setOpacity(0.86 + 0.14 * math.sin(t * 1.15 + phase * 1.7))
+            q.drawPixmap(round(reach * 0.5 * (math.sin(t * 0.8 + phase) + math.sin(t * 0.37 + phase * 2.3))),
+                         round(reach * 0.5 * (math.cos(t * 0.65 + phase * 1.3) + math.sin(t * 0.29 + phase * 0.7))), pm)
         q.end()
 
     def _art_tick(self):
@@ -485,28 +535,28 @@ class Backdrop(QWidget):
         self.update(QRect(self.art_origin, self.base.size()))
 
     def _paint_art(self, p):
-        if self.base is None:
-            self._build_art()
+        if self.art_ready != self.art_gen:
+            self._start_art()
         self._paint_stars(p)
-        if not self.art_layers:
+        if not self.art_layers or self.base is None:
             return
         p.drawPixmap(self.art_origin, self.base)
-        # near the cursor the dots simply light up, softly, more the closer they are
+        # near the cursor the particles simply light up, softly, more the closer they are
         m = self.mouse
-        if self._near is None or self._near[0] != (m.x(), m.y()):
-            d = np.hypot(self.art_xs - m.x(), self.art_ys - m.y())
-            k = 1 - d / _ART_REACH
-            bands = []
-            for lo, hi, alpha, width in ((0.0, 0.33, 0.16, 3.0), (0.33, 0.66, 0.3, 3.4), (0.66, 1.01, 0.46, 3.8)):
-                pick = (k > lo) & (k <= hi)
-                for red in (False, True):
-                    poly = QPolygonF()
-                    for x, y in zip(self.art_xs[pick & (self.art_red == red)].tolist(), self.art_ys[pick & (self.art_red == red)].tolist()):
-                        poly.append(QPointF(x, y))
-                    bands.append((poly, alpha, width, red))
-            self._near = ((m.x(), m.y()), bands)
-        for poly, alpha, width, red in self._near[1]:
-            c = QColor(232, 76, 76) if red else QColor(T.col(T.TEXT))
-            c.setAlphaF(alpha)
-            p.setPen(QPen(c, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            p.drawPoints(poly)
+        at = QPoint(int(m.x()), int(m.y())) - self.art_origin
+        r = _ART_REACH
+        spot = QRect(at.x() - r, at.y() - r, 2 * r, 2 * r).intersected(self.base.rect())
+        if spot.isEmpty():
+            return
+        glow = self.base.copy(spot)
+        q = QPainter(glow)
+        q.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        fall = QRadialGradient(QPointF(at - spot.topLeft()), r)
+        fall.setColorAt(0.0, QColor(0, 0, 0, 200))
+        fall.setColorAt(1.0, QColor(0, 0, 0, 0))
+        q.fillRect(glow.rect(), fall)
+        q.end()
+        if T.MODE == "dark":
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+        p.drawPixmap(spot.topLeft() + self.art_origin, glow)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
