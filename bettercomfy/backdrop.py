@@ -4,7 +4,7 @@ import math
 import random
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -14,26 +14,45 @@ from .config import cfg
 KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code", "Binary city"), ("art", "Dot art"))
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
+_COLOURED = 0.34                        # from this saturation on, a place in the picture counts as having colour
 _ART_REACH = 96                         # the dot art has many more dots to move
 _SPEED = {"dots": 33, "cloud": 70, "code": 110, "art": 33}
 
 
 # ------------------------------------------------------------------------------------------------ dot art
 def stipple(img, height, invert=False):
-    """The dots on a canvas of that height, as (xs, ys): as many in a place as it is bright (or dark, for a light theme)."""
+    """The dots on a canvas of that height, as (xs, ys, colours): as many in a place as it is bright (or dark, for a light
+    theme). Colours: 0 for a plain dot, else the softened 0xRRGGBB of a place in the picture that has real colour."""
     view = img.convertToFormat(QImage.Format.Format_Grayscale8)
+    rgb = img.convertToFormat(QImage.Format.Format_RGB888)
+    rgb = np.frombuffer(rgb.constBits(), np.uint8).reshape(rgb.height(), rgb.bytesPerLine())[:, :rgb.width() * 3]
+    rgb = rgb.reshape(view.height(), view.width(), 3).astype(np.float32)
     lum = np.frombuffer(view.constBits(), np.uint8).reshape(view.height(), view.bytesPerLine())[:, :view.width()] / 255
     lo, hi = np.percentile(lum, (2, 98))        # any picture uses the whole range, from no dots to many
     lum = np.clip((lum - lo) / max(hi - lo, 0.01), 0, 1)
     scale = height / view.height()
     rng = np.random.default_rng(7)
-    n = int(view.width() * view.height() * scale * scale * 0.42)    # dots if everything were white
-    x, y = rng.random(n) * view.width(), rng.random(n) * view.height()
+    # one try per small cell of an even grid, somewhere inside the cell: no clumps, so lines stay clean
+    step = 1 / (scale * math.sqrt(0.62))
+    gx, gy = np.meshgrid(np.arange(0, view.width(), step), np.arange(0, view.height(), step))
+    gx, gy = gx.ravel(), gy.ravel()
+    n = gx.size
+    x = np.clip(gx + rng.random(n) * step, 0, view.width() - 1)
+    y = np.clip(gy + rng.random(n) * step, 0, view.height() - 1)
     v = lum[y.astype(int), x.astype(int)]
     if invert:
         v = np.where(v > 0.01, 1 - v, 0)
-    keep = v ** 1.5 > rng.random(n)
-    return x[keep] * scale, y[keep] * scale
+    # how much colour each place has; coloured places keep their dots even when they are darkish
+    c = rgb[y.astype(int), x.astype(int)]
+    top = c.max(axis=1)
+    sat = np.where(top > 40, (top - c.min(axis=1)) / np.maximum(top, 1), 0)
+    v = np.maximum(v, np.where(sat > _COLOURED, 0.62, 0))
+    keep = v ** 1.15 > rng.random(n)
+    # softened: a little towards grey and never too dark to see; in steps, so few pens are needed
+    soft = c[keep] * 0.78 + c[keep].mean(axis=1, keepdims=True) * 0.22
+    soft = np.clip(soft * (190 / np.maximum(soft.max(axis=1, keepdims=True), 1)), 0, 255).astype(np.uint32) & 0xE0
+    tint = (soft[:, 0] << 16) | (soft[:, 1] << 8) | soft[:, 2]
+    return x[keep] * scale, y[keep] * scale, np.where(sat[keep] > _COLOURED, tint, 0)
 
 
 # ------------------------------------------------------------------------------------------------ the widget
@@ -258,24 +277,25 @@ class Backdrop(QWidget):
         w, h = self.width(), self.height()
         self.base = QPixmap(max(1, w), max(1, h))
         self.base.fill(Qt.GlobalColor.transparent)
-        self.dot_col = QColor(T.col(T.TEXT2 if T.MODE == "dark" else T.TEXT3))
+        self.dot_col = QColor(T.col(T.TEXT if T.MODE == "dark" else T.TEXT2))
         self.cells = {}
         img = QImage(cfg.get("backdrop_art") or "")
         if img.isNull():
             return
         img = img.scaledToHeight(900, Qt.TransformationMode.SmoothTransformation)
         size = max(1, int(h * 0.97))
-        xs, ys = stipple(img, size, T.MODE == "light")
+        xs, ys, tints = stipple(img, size, T.MODE == "light")
         art_w = size * img.width() / img.height()
         ox, oy = max(0, min(w - art_w, w * 0.64 - art_w / 2)), h - size
-        poly = QPolygonF()
-        for x, y in zip((xs + ox).tolist(), (ys + oy).tolist()):
+        groups = {}
+        for x, y, tint in zip((xs + ox).tolist(), (ys + oy).tolist(), tints.tolist()):
             pt = QPointF(x, y)
-            poly.append(pt)
+            groups.setdefault(tint, QPolygonF()).append(pt)
             self.cells.setdefault((int(x) // 48, int(y) // 48), []).append(pt)
         q = QPainter(self.base)
-        q.setPen(QPen(self.dot_col, 1.0))
-        q.drawPoints(poly)
+        for tint, poly in groups.items():
+            q.setPen(QPen(QColor(tint | 0xFF000000) if tint else self.dot_col, 1.0))
+            q.drawPoints(poly)
         q.end()
 
     def _paint_art(self, p):
