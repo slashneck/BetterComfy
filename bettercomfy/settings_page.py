@@ -4,12 +4,12 @@ import threading
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
-from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
+from PySide6.QtWidgets import QCheckBox, QColorDialog, QFileDialog, QMenu, QHBoxLayout, QLabel, QLineEdit, QMessageBox, \
     QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from . import comfy, icons, system, theme as T
 from .config import APP_NAME, BASE, VERSION, cfg, resource
-from .backdrop import KINDS
+from .backdrop import KINDS, art_path, art_pictures
 from .hotkey import KeyCatcher
 from .queue_page import AFTER
 from .quick import ConnectionLog, Shortcuts
@@ -1207,11 +1207,31 @@ class SettingsPage(QWidget):
     def _backdrop(self):
         kind = self.backdrop.currentData()
         self.art_btn.setVisible(kind == "art")
-        if kind == "art" and not os.path.isfile(cfg.get("backdrop_art") or ""):
-            self._backdrop_art()
+        if kind == "art" and not art_path():
+            self._backdrop_file()
         self.app.set_backdrop(kind)
 
     def _backdrop_art(self):
+        """The pictures kept for Dot art, or any other."""
+        kept = art_pictures()
+        if not kept:
+            self._backdrop_file()
+            return
+        m = QMenu(self)
+        for name, path in kept:
+            a = m.addAction(name)
+            a.setCheckable(True)
+            a.setChecked(path == art_path())
+            a.triggered.connect(lambda _=False, p=path: self._backdrop_use(p))
+        m.addSeparator()
+        m.addAction("Another picture…").triggered.connect(self._backdrop_file)
+        m.exec(self.art_btn.mapToGlobal(self.art_btn.rect().bottomLeft()))
+
+    def _backdrop_use(self, path):
+        cfg.set("backdrop_art", path)
+        self.app.backdrop.rebuild()
+
+    def _backdrop_file(self):
         path, _f = QFileDialog.getOpenFileName(self, "A picture for the dots", "", "Pictures (*.png *.jpg *.jpeg *.webp)")
         if path:
             cfg.set("backdrop_art", path)
