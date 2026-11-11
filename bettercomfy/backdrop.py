@@ -16,6 +16,8 @@ KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code"
 ART_DIR = os.path.join(BASE, "backdrop_art")     # your own pictures for Dot art (they stay on this PC)
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
+DENSITY = 0.62                          # dots per pixel where a picture is at its brightest
+_LINE = 0.075                           # up to this brightness a thin stroke counts as an outline
 _COLOURED = 0.34                        # from this saturation on, a place in the picture counts as having colour
 _ART_REACH = 96                         # the dot art has many more dots to move
 _SPEED = {"dots": 33, "cloud": 70, "code": 110, "art": 40}
@@ -39,6 +41,24 @@ def art_path():
     return next((path for _n, path in art_pictures()), "")
 
 
+def _window_sum(mask, size):
+    """How many set pixels each pixel has in the square around it, and how big that square is there."""
+    h, w = mask.shape
+    r = size // 2
+    table = np.pad(mask.astype(np.int32).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    y0, y1 = np.clip(np.arange(h) - r, 0, h), np.clip(np.arange(h) + r + 1, 0, h)
+    x0, x1 = np.clip(np.arange(w) - r, 0, w), np.clip(np.arange(w) + r + 1, 0, w)
+    total = table[y1][:, x1] - table[y0][:, x1] - table[y1][:, x0] + table[y0][:, x0]
+    return total, (y1 - y0)[:, None] * (x1 - x0)
+
+
+def _broad_dark(shade):
+    """Near-black places that are areas (dark clothes) and not lines (outlines): only the lines stay fully black."""
+    dark = (shade > 0.012) & (shade <= _LINE)
+    total, area = _window_sum(dark, 9)
+    return _window_sum(total == area, 9)[0] > 0
+
+
 def stipple(img, height, invert=False, detail=1.0):
     """The dots on a canvas of that height, as (xs, ys, colours): as many in a place as it is bright (or dark, for a light
     theme). Colours: 0 for a plain dot, else the softened 0xRRGGBB where the picture is red; blue goes dark. detail: below 1
@@ -53,7 +73,7 @@ def stipple(img, height, invert=False, detail=1.0):
     scale = height / view.height()
     rng = np.random.default_rng(7)
     # one try per small cell of an even grid, somewhere inside the cell: no clumps, so lines stay clean
-    step = 1 / (scale * math.sqrt(0.62 * detail))
+    step = 1 / (scale * math.sqrt(DENSITY * detail))
     gx, gy = np.meshgrid(np.arange(0, view.width(), step), np.arange(0, view.height(), step))
     gx, gy = gx.ravel(), gy.ravel()
     n = gx.size
@@ -71,7 +91,10 @@ def stipple(img, height, invert=False, detail=1.0):
     # the outlines and the background are really black
     shade = c.mean(axis=1) / 255
     if not invert:
-        v = np.where(shade > 0.075, 0.34 + 0.66 * shade ** 0.9, 0)
+        v = np.where(shade > _LINE, 0.34 + 0.66 * shade ** 0.9, 0)
+        broad = _broad_dark(rgb.mean(axis=2) / 255)[y.astype(int), x.astype(int)]
+        v = np.where(broad, 0.3, v)     # a dark grey instead of a black hole
+        shade = np.where(broad, 0.13, shade)
     v = np.maximum(v, np.where(red, 0.62, 0))
     keep = v ** 1.15 > rng.random(n)
     # softened: a little towards grey and never too dark to see; in steps, so few pens are needed
