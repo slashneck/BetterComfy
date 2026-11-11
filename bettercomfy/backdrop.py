@@ -67,15 +67,22 @@ def stipple(img, height, invert=False, detail=1.0):
     top = c.max(axis=1)
     sat = np.where(top > 40, (top - c.min(axis=1)) / np.maximum(top, 1), 0)
     red = (sat > _COLOURED) & (c[:, 0] > c[:, 1] * 1.35) & (c[:, 0] > c[:, 2] * 1.25)
-    blue = (sat > 0.1) & (top < 140) & (c[:, 2] > c[:, 0] * 1.05)    # dark blue only: pale skin can be a bit blue too
-    v = np.where(blue, v * 0.1, v)             # only white, black and red: blue goes black
+    # tones show as shades of grey as well as by how many dots there are: skin and dark clothes stay apart, and only
+    # the outlines and the background are really black
+    shade = c.mean(axis=1) / 255
+    if not invert:
+        v = np.where(shade > 0.075, 0.34 + 0.66 * shade ** 0.9, 0)
     v = np.maximum(v, np.where(red, 0.62, 0))
     keep = v ** 1.15 > rng.random(n)
     # softened: a little towards grey and never too dark to see; in steps, so few pens are needed
     soft = c[keep] * 0.78 + c[keep].mean(axis=1, keepdims=True) * 0.22
     soft = np.clip(soft * (190 / np.maximum(soft.max(axis=1, keepdims=True), 1)), 0, 255).astype(np.uint32) & 0xE0
     tint = (soft[:, 0] << 16) | (soft[:, 1] << 8) | soft[:, 2]
-    return x[keep] * scale, y[keep] * scale, np.where(red[keep], tint, 0)
+    grey = 0
+    if not invert:
+        level = (70 + 185 * shade[keep] ** 0.75).astype(np.uint32) & 0xF0 | 0x0F
+        grey = level * 0x10101
+    return x[keep] * scale, y[keep] * scale, np.where(red[keep], tint, grey)
 
 
 # ------------------------------------------------------------------------------------------------ the widget
