@@ -239,10 +239,10 @@ class History(QObject):
             self._save_cols()
 
     def remove_collection(self, cid):
-        """The collection only - its pictures and videos stay, its subfolders become main folders."""
+        """The collection only - its pictures and videos stay, its subfolders move up one level."""
         from . import folders
-        self.collections = [c for c in self.collections if c["id"] != cid]
         folders.promote_children(self.collections, cid)
+        self.collections = [c for c in self.collections if c["id"] != cid]
         for e in self.items:
             if cid in (e.get("cols") or []):
                 self.update(e["id"], cols=[x for x in e["cols"] if x != cid])

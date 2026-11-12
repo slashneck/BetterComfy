@@ -961,7 +961,7 @@ class ImageDrop(QFrame):
         if self.pm is not None and self.pm.isNull():
             self.pm, self.path = None, ""
         self.clear_btn.setVisible(bool(self.path))
-        self.setToolTip(self.path)
+        self.setToolTip(os.path.basename(self.path))
         self.update()
         if emit:
             self.changed.emit(self.path)
@@ -1142,6 +1142,14 @@ class Player(QWidget):
     def enterEvent(self, e):
         if not self.click_pauses and self.frames:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def event(self, e):
+        # its hint only over the picture: not over the empty space around it, nor when nothing is shown
+        if e.type() == QEvent.Type.ToolTip and not self.image_rect().contains(QPointF(e.pos())):
+            QToolTip.hideText()
+            e.ignore()
+            return True
+        return super().event(e)
 
     def leaveEvent(self, e):
         self.unsetCursor()
@@ -1335,7 +1343,6 @@ class Filmstrip(FileList):
         for e in entries:
             it = QListWidgetItem(self.thumb_icon(e), "")
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
-            it.setToolTip((e.get("prompt") or "")[:300])
             self.addItem(it)
             if keep and e["id"] == keep:
                 self.setCurrentItem(it)
@@ -1344,7 +1351,6 @@ class Filmstrip(FileList):
     def prepend(self, e, select=True):
         it = QListWidgetItem(self.thumb_icon(e), "")
         it.setData(Qt.ItemDataRole.UserRole, e["id"])
-        it.setToolTip((e.get("prompt") or "")[:300])
         self.insertItem(0, it)
         if select:
             self.blockSignals(True)

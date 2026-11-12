@@ -80,10 +80,10 @@ memory, stop ComfyUI, close the app, sleep or shut down.
 
 **A gallery.** Everything you made, with its settings. Reuse them, view pictures big with zoom, join videos, animate or
 upscale from there. Pictures keep their settings inside the file, and dropping one onto ComfyUI opens its workflow.
-Find duplicates compares pictures locally, without AI, and stacks the look-alikes: nothing is deleted, you go through
-a stack and keep what you want. Select 2 to 4 pictures to see them side by side with zoom that follows, or export many at
+Find duplicates compares the pictures of the collection you have open (or the vault) locally, without AI, and stacks
+the look-alikes: nothing is deleted, you go through a stack and keep what you want. Select 2 to 4 pictures to see them side by side with zoom that follows, or export many at
 once, with the prompt and settings taken out if you like. Favourite with F, mark with X and delete everything marked at once (favourites are never deleted), sort by date, type,
-model or LoRA, filter and search, and keep pictures in collections with sub-collections (also smart ones that fill
+model or LoRA (or look-alikes first), filter and search, and keep pictures in collections with sub-collections a few levels deep (also smart ones that fill
 themselves by model or LoRA). Videos play with their sound, a time bar and volume in the big viewer, GIFs loop at a
 speed you set and can be gone through frame by frame, and a slideshow runs through it all. Trim, crop, turn and mirror
 pictures, GIFs and videos, or save a frame as a picture: always as a new one next to the original. Drag pictures in

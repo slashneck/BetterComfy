@@ -423,7 +423,7 @@ class SettingsPage(QWidget):
             self.backdrop.addItem(t, k)
         for name, _path in art_pictures():
             self.backdrop.addItem(f"Dot art: {name}", f"art:{name}")
-        set_combo(self.backdrop, cfg.get("backdrop") or "none")
+        set_combo(self.backdrop, cfg.get("backdrop") or "dots")
         self.backdrop.currentIndexChanged.connect(lambda _i: self.app.set_backdrop(self.backdrop.currentData()))
         c.add(field("Background", self.backdrop, "A faint moving background behind the pages. It stops when another "
                                                  "program is in front. Needs Animations on.", label_w=90))

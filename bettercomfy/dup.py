@@ -23,14 +23,15 @@ def _flat(h):
     return h.bit_count() < 6 or h.bit_count() > 58
 
 
-def groups(entries, progress=None, cancel=None):
-    """[[entry, …], …]: the stacks. Same kind only (a picture is never stacked with a video)."""
+def groups(entries, progress=None, cancel=None, load=None):
+    """[[entry, …], …]: the stacks. Same kind only (a picture is never stacked with a video). load(entry): where its
+    picture comes from (a path or an open file), when it is not its thumbnail or file (the vault)."""
     prints = []
     for i, e in enumerate(entries):
         if cancel and cancel():
             return []
         try:
-            h = fingerprint(e.get("thumb") or e["file"])
+            h = fingerprint(load(e) if load else (e.get("thumb") or e["file"]))
         except Exception:
             continue
         if not _flat(h):

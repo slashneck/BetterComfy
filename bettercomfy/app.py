@@ -213,7 +213,11 @@ class Window(QMainWindow):
         h.addWidget(main, 1)
         self.backdrop = Backdrop(root)
         self.backdrop.lower()
-        self.backdrop.set_kind(cfg.get("backdrop") or "none")
+        if not cfg.get("backdrop_dots_default"):     # once: Dots became the default (Off stays a choice)
+            cfg.set("backdrop_dots_default", True)
+            if (cfg.get("backdrop") or "none") == "none":
+                cfg.set("backdrop", "dots")
+        self.backdrop.set_kind(cfg.get("backdrop") or "dots")
         self.pages = {}
         for key, cls in (("image", ImagePage), ("video", VideoPage), ("queue", QueuePage), ("gallery", GalleryPage), ("storage", StoragePage),
                          ("loras", LorasPage), ("models", CheckpointsPage), ("characters", CharactersPage),

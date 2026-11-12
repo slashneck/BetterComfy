@@ -709,8 +709,8 @@ class Vault:
         with self._lock:
             self._need()
             from . import folders
-            self.collections = [c for c in self.collections if c["id"] != cid]
             folders.promote_children(self.collections, cid)
+            self.collections = [c for c in self.collections if c["id"] != cid]
             for e in self.entries + self.offline:
                 if cid in (e.get("cols") or []):
                     e["cols"] = [x for x in e["cols"] if x != cid]

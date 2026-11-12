@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from . import theme as T
 
-KINDS = (("none", "None"), ("dots", "Dots"), ("cloud", "Constellation"), ("code", "Binary city"))
+KINDS = (("dots", "Dots"), ("cloud", "Constellation"), ("code", "Binary city"), ("none", "Off"))
 ART_DIR = os.path.join(os.path.expanduser("~"), "Pictures", "Better Comfy", "Dot art")     # pictures for Dot art, if any
 _GAP = 34                               # between the dots
 _REACH = 130                            # how far the cursor is felt
@@ -188,7 +188,7 @@ class Backdrop(QWidget):
         if kind.startswith("art"):
             kept = dict(art_pictures())
             self.art_file = kept.get(kind[4:]) or next(iter(kept.values()), "")
-            kind = "art" if self.art_file else "none"
+            kind = "art" if self.art_file else "dots"
         self.kind = kind
         self.points = []
         self.base = None

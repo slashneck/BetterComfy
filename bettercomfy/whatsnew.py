@@ -6,6 +6,15 @@ from .config import VERSION, cfg
 from .widgets import Scroll, button, hrow, label
 
 NOTES = {
+    "1.5.1": [
+        ("Albums inside albums", "Sub-collections can hold their own now, a few levels deep. Moving a collection from "
+                                 "the right click menu puts it exactly where you picked."),
+        ("Duplicates where you are", "Find duplicates only looks through the collection or sub-collection that is "
+                                     "open, and works in the vault and its collections too."),
+        ("Duplicates first", "A new sort that puts the stacks of look-alikes on top."),
+        ("Calmer hints", "No more long prompt pop-ups over pictures, and no hint over the empty preview."),
+        ("Dots", "The Dots background is on by default. Off is still in Settings."),
+    ],
     "1.5.0": [
         ("Characters (work in progress)", "Make a character from a few pictures, pick it on the Image page and put "
                                           "it in any scene. It works, but isn't finished yet."),

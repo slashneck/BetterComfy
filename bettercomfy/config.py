@@ -7,7 +7,7 @@ import sys
 
 APP_NAME = "Better Comfy"
 APP_ID = "BetterComfy"
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 REPO = "slashneck/BetterComfy"
 REPO_URL = "https://github.com/" + REPO
 
@@ -95,7 +95,7 @@ DEFAULTS = {
     "clean_copies": False,            # a second file of each result without prompt and settings (not private jobs)
     "export_dir": "",
     "ui_mode": "dark",                # dark or light
-    "backdrop": "none",               # the moving background: none, dots, cloud, code or art:<picture>
+    "backdrop": "dots",               # the moving background: none, dots, cloud, code or art:<picture>
     "move_dir": "",
     "seen_version": "",               # the version whose What's new was shown
     "panic_key": "",                  # the key combination that hides the app and locks the vault

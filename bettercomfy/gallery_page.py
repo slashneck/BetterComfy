@@ -18,7 +18,7 @@ from .widgets import (ChipBox, Combo, FileList, Player, Segmented, anims_on, but
                       nice_name, set_combo)
 from . import stores
 
-SORTS = [("new", "Newest first"), ("old", "Oldest first"), ("model", "Checkpoint"), ("lora", "LoRA"),
+SORTS = [("new", "Newest first"), ("dups", "Duplicates first"), ("old", "Oldest first"), ("model", "Checkpoint"), ("lora", "LoRA"),
          ("preset", "Preset"), ("type", "Type"), ("size", "Size")]
 LIBRARY = [("all", "All", "gallery"), ("fav", "Favourites", "starf"), ("marked", "Marked for deletion", "trash"),
            ("image", "Images", "image"), ("video", "Videos", "video"), ("dups", "Duplicates", "layers")]
@@ -49,6 +49,7 @@ INDENT_ROLE = Qt.ItemDataRole.UserRole + 3     # how far an entry of the column 
 GROUP_ROLE = Qt.ItemDataRole.UserRole + 4      # on a sub-collection: the key of its collection
 LAST_ROLE = Qt.ItemDataRole.UserRole + 5       # the last sub-collection of its collection (its line ends there)
 THREAD_X = Qt.ItemDataRole.UserRole + 6        # where the thread line runs down (under its collection's icon)
+PASS_ROLE = Qt.ItemDataRole.UserRole + 7       # deeper down: the lines of the levels above that go on past it
 
 
 class _NavDelegate(QStyledItemDelegate):
@@ -78,6 +79,8 @@ class _NavDelegate(QStyledItemDelegate):
             p.drawPath(path)
             if not idx.data(LAST_ROLE):
                 p.drawLine(QPointF(x, mid - 5), QPointF(x, r.bottom() + 2))
+            for px in idx.data(PASS_ROLE) or []:
+                p.drawLine(QPointF(r.left() + px, r.top() - 2), QPointF(r.left() + px, r.bottom() + 2))
             p.restore()
         if ind:
             o = QStyleOptionViewItem(opt)
@@ -226,6 +229,12 @@ class Nav(QListWidget):
         e.acceptProposedAction()
 
 
+def _menu_name(cols, c):
+    """A collection in a menu: sub-collections moved in under the one they are in."""
+    d = folders.depth(cols, c)
+    return ("    " * (d - 1) + "↳ " if d > 1 else "") + c["name"]
+
+
 def _hide(it):
     try:
         it.setHidden(True)
@@ -339,7 +348,8 @@ class GalleryPage(QWidget):
         nv.addWidget(self.nav, 1)
         nv.addWidget(button("New collection", self._new_collection, "Ghost", "plus"))
         nv.addWidget(button("Find duplicates", self._find_dups, "Ghost", "layers",
-                            "Stacks pictures that look the same. Nothing is deleted."))
+                            "Stacks pictures that look the same in what is open here (a collection, the "
+                            "vault…). Nothing is deleted."))
         imp = button("Import…", self._import, "Ghost", "upload",
                      "Bring pictures and videos in from a folder or another app (or drop them onto the gallery)")
         nv.addWidget(imp)
@@ -685,16 +695,25 @@ class GalleryPage(QWidget):
                             "open it, and it shows what is in them too")
                 it.setToolTip(tip + "\nDrag it to put it somewhere else, or right click")
             else:
-                # no icon: a thin line from its collection shows where it belongs
+                # no icon: a thin line from the collection it is in shows where it belongs (deeper: further in)
+                d = folders.depth(cols, c) - 2
                 it = QListWidgetItem(f"{c['name']}   {n}")
-                it.setData(INDENT_ROLE, indent + 34)
-                it.setData(THREAD_X, indent + 19)
-                it.setData(GROUP_ROLE, pre + c["parent"])
+                it.setData(INDENT_ROLE, indent + 34 + 18 * d)
+                it.setData(THREAD_X, indent + 19 + 18 * d)
+                it.setData(GROUP_ROLE, pre + folders.root(cols, c)["id"])
                 it.setData(LAST_ROLE, folders.children(cols, c["parent"])[-1]["id"] == c["id"])
-                it.setToolTip("A sub-collection: only what is in it. Drag it out or right click to move it")
+                runs, a = [], folders.find(cols, c["parent"])
+                while a and a.get("parent"):
+                    if folders.children(cols, a["parent"])[-1]["id"] != a["id"]:
+                        runs.append(indent + 19 + 18 * (folders.depth(cols, a) - 2))
+                    a = folders.find(cols, a["parent"])
+                it.setData(PASS_ROLE, runs)
+                it.setToolTip("A sub-collection: only what is in it" +
+                              (" and its own sub-collections" if folders.children(cols, c["id"]) else "") +
+                              ". Drag it or right click to move it")
             it.setData(Qt.ItemDataRole.UserRole, key)
             self.nav.addItem(it)
-            if not folders.is_main(c) and self._open != pre + c["parent"]:
+            if not folders.is_main(c) and self._open != it.data(GROUP_ROLE):
                 it.setHidden(True)              # (only works once it is in the list)
             if key == cur:
                 self.nav.setCurrentItem(it)
@@ -703,8 +722,8 @@ class GalleryPage(QWidget):
         return self.history.collections if pre == "col:" else (vault.collections if vault.is_open() else [])
 
     def _group(self, key):
-        """The collection to fold out for a place: itself (when it has sub-collections), or the one a sub-collection
-        is in."""
+        """The collection to fold out for a place: itself (when it has sub-collections), or the top one a
+        sub-collection is in."""
         key = str(key or "")
         if not key.startswith(("col:", "vcol:")):
             return None
@@ -715,7 +734,7 @@ class GalleryPage(QWidget):
         if not c:
             return None
         if c.get("parent"):
-            return pre + c["parent"]
+            return pre + folders.root(cols, c)["id"]
         return key if folders.children(cols, cid) else None
 
     def _sub_items(self, group):
@@ -756,7 +775,7 @@ class GalleryPage(QWidget):
         pre = src.split(":", 1)[0] + ":"
         cols = folders.move(self._folder_cols(pre), src.split(":", 1)[1], tgt.split(":", 1)[1], where)
         if cols is None:
-            self.app.toast("A collection with sub-collections can't go inside another one.", "info")
+            self.app.toast(f"That would go deeper than {folders.MAX_DEPTH} levels.", "info")
             return
         self._set_folders(pre, cols)
 
@@ -774,22 +793,21 @@ class GalleryPage(QWidget):
             parent = folders.find(cols, c["parent"]) or {"name": ""}
             m.addAction(icons.icon("layers", "#A1A1AA", 16), f"Take it out of '{parent['name']}'").triggered.connect(
                 lambda: self._set_folders(pre, new))
-        mains = [x for x in folders.ordered(cols) if folders.is_main(x) and x["id"] != c["id"]
-                 and x["id"] != c.get("parent")]
-        sub = m.addMenu(icons.icon("layers", "#A1A1AA", 16), "Make it a sub-collection of")
-        if folders.children(cols, c["id"]):
-            sub.setEnabled(False)
-            sub.setToolTip("It has sub-collections itself")
-        elif not mains:
-            sub.setEnabled(False)
-        for x in mains:
+        sub = m.addMenu(icons.icon("layers", "#A1A1AA", 16), "Put it inside")
+        mine = folders.family(cols, c["id"])
+        for x in folders.ordered(cols):
+            if x["id"] in mine or x["id"] == c.get("parent"):
+                continue
             new = folders.move(cols, c["id"], x["id"], "into")
-            sub.addAction(x["name"]).triggered.connect(lambda _=False, new=new: self._set_folders(pre, new))
+            if new is not None:
+                sub.addAction("    " * (folders.depth(cols, x) - 1) + x["name"]).triggered.connect(
+                    lambda _=False, new=new: self._set_folders(pre, new))
+        sub.setEnabled(not sub.isEmpty())
 
     def _in_col(self, e, c, cols=None):
         """In the collection - also in any of its sub-collections."""
         cols = self.history.collections if cols is None else cols
-        for x in [c] + (folders.children(cols, c["id"]) if folders.is_main(c) else []):
+        for x in [c] + folders.descendants(cols, c["id"]):
             if x.get("smart"):
                 if _matches(e, x["smart"]):
                     return True
@@ -862,6 +880,7 @@ class GalleryPage(QWidget):
         self._slide_anim = anim
 
     def _vault_changed(self, nav=True):
+        self._dup_cache = None
         if not vault.is_open():
             if hasattr(self, "_vthumbs"):
                 self._vgen += 1
@@ -942,7 +961,7 @@ class GalleryPage(QWidget):
             if c:
                 m = QMenu(self)
                 m.addAction("Rename…").triggered.connect(lambda: self._rename_vcol(c))
-                if folders.is_main(c):
+                if folders.can_hold(vault.collections, c):
                     m.addAction(icons.icon("plus", "#A1A1AA", 16), "New sub-collection…").triggered.connect(
                         lambda: self._new_vcol(parent=c["id"]))
                 self._folder_menu(m, "vcol:", c)
@@ -958,7 +977,7 @@ class GalleryPage(QWidget):
         c = self.history.collection(key[4:])
         m = QMenu(self)
         m.addAction("Rename…").triggered.connect(lambda: self._rename(c))
-        if folders.is_main(c):
+        if folders.can_hold(self.history.collections, c) and not c.get("smart"):
             m.addAction(icons.icon("plus", "#A1A1AA", 16), "New sub-collection…").triggered.connect(
                 lambda: self._new_collection(parent=c["id"]))
         self._folder_menu(m, "col:", c)
@@ -988,7 +1007,7 @@ class GalleryPage(QWidget):
             self._fill_nav()
 
     def _del_vcol(self, c):
-        kids = " Its sub-collections become normal collections." if folders.children(vault.collections, c["id"]) else ""
+        kids = " Its sub-collections move up one level." if folders.children(vault.collections, c["id"]) else ""
         if QMessageBox.question(self, "Collection", f"Delete the collection '{c['name']}'? Its pictures and videos stay "
                                                     f"in the vault.{kids}") == QMessageBox.StandardButton.Yes:
             if self.place == "vcol:" + c["id"]:
@@ -1004,7 +1023,7 @@ class GalleryPage(QWidget):
         m = QMenu(self)
         for c in folders.ordered(vault.collections):
             inside = all(c["id"] in (e.get("cols") or []) for e in entries)
-            a = m.addAction(("      ↳ " if c.get("parent") else "") + c["name"])
+            a = m.addAction(_menu_name(vault.collections, c))
             a.setCheckable(True)
             a.setChecked(inside)
             a.triggered.connect(lambda _=False, c=c, inside=inside: self._vcol_set(entries, c, not inside))
@@ -1026,8 +1045,8 @@ class GalleryPage(QWidget):
             self.history.rename_collection(c["id"], name)
 
     def _del_collection(self, c):
-        kids = " Its sub-collections become normal collections." if folders.children(self.history.collections,
-                                                                                       c["id"]) else ""
+        kids = " Its sub-collections move up one level." if folders.children(self.history.collections,
+                                                                             c["id"]) else ""
         if QMessageBox.question(self, "Collection", f"Delete the collection '{c['name']}'? Its pictures and videos stay "
                                                     f"in the gallery.{kids}") == QMessageBox.StandardButton.Yes:
             if self.place == "col:" + c["id"]:
@@ -1214,6 +1233,9 @@ class GalleryPage(QWidget):
         if e is None:
             return
         ic = self._vthumbs[self._vkey(e)] = self._vrender(e, data)
+        groups = self._dup_groups()
+        if not self.stack and e.get("dup") in groups:
+            ic = self._stack_icon(e, len(groups[e["dup"]]))
         it = self._rows.get(eid)
         if it is not None:
             try:
@@ -1333,7 +1355,11 @@ class GalleryPage(QWidget):
             return sorted(items, key=lambda e: (e.get("kind", ""), e.get("created", "")))
         if k == "size":
             return sorted(items, key=lambda e: -(int(e.get("w") or 0) * int(e.get("h") or 0)))
-        return sorted(items, key=lambda e: e.get("created", ""), reverse=True)
+        out = sorted(items, key=lambda e: e.get("created", ""), reverse=True)
+        if k == "dups":                         # stacks of look-alikes on top, newest first in each part
+            groups = self._dup_groups()
+            out.sort(key=lambda e: e.get("dup") not in groups)
+        return out
 
     def fill(self):
         self._dirty = False
@@ -1352,16 +1378,15 @@ class GalleryPage(QWidget):
         else:
             items = [e for e in source if self._in_place(e) and _matches(e, f)]
             items = self._sorted(items)
-            if not in_vault:            # look-alikes are one pile of pictures: only the top one shows
-                seen, piled = set(), []
-                for e in items:
-                    g = e.get("dup")
-                    if g in groups:
-                        if g in seen:
-                            continue
-                        seen.add(g)
-                    piled.append(e)
-                items = piled
+            seen, piled = set(), []         # look-alikes are one pile of pictures: only the top one shows
+            for e in items:
+                g = e.get("dup")
+                if g in groups:
+                    if g in seen:
+                        continue
+                    seen.add(g)
+                piled.append(e)
+            items = piled
         self.stack_bar.setVisible(bool(self.stack))
         if self.stack:
             self.stack_text.setText(f"A stack of {len(items)}: press Keep on what should stand alone, X marks for deletion.")
@@ -1374,14 +1399,13 @@ class GalleryPage(QWidget):
         self.grid.setGridSize(QSize(self.thumb + 14, self.thumb + 14))
         self._later = {}
         for row, e in enumerate(self._shown):
-            piled = not self.stack and not in_vault and e.get("dup") in groups
+            piled = not self.stack and e.get("dup") in groups
             make = (lambda e=e: self._stack_icon(e, len(groups[e["dup"]]))) if piled else (lambda e=e: self._icon(e))
             icon = self._cached_icon(e, piled, groups)
             it = QListWidgetItem(icon if icon is not None else self._blank_icon(), "")
             if icon is None:
                 self._later[row] = (it, make)
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
-            it.setToolTip((e.get("prompt") or "")[:300])
             self.grid.addItem(it)
             self._rows[e["id"]] = it
             if e["id"] == keep:
@@ -1461,7 +1485,10 @@ class GalleryPage(QWidget):
         self.prompt.setPlainText(e.get("final_prompt") or e.get("prompt") or "")
         gif = media.is_gif(e)
         self.gif_row.hide()
-        if e.get("vault"):
+        if not self.stack and e["kind"] == "image" and not gif and e.get("dup") in self._dup_groups():
+            pile = self._dup_groups()[e["dup"]]
+            self.player.show_image(self._collage([e] + [x for x in pile if x is not e]), f"Stack of {len(pile)}")
+        elif e.get("vault"):
             if e["kind"] == "video":
                 self.player.message("Loading…")
                 self.loader.load(e["id"], None, e)
@@ -1477,9 +1504,6 @@ class GalleryPage(QWidget):
         elif e["kind"] == "video":
             self.player.show_image(e.get("thumb") or "", "Loading…", fade=False)
             self.loader.load(e["id"], e["file"])
-        elif not self.stack and e.get("dup") in self._dup_groups():
-            pile = self._dup_groups()[e["dup"]]
-            self.player.show_image(self._collage([e] + [x for x in pile if x is not e]), f"Stack of {len(pile)}")
         else:
             self.player.show_image(e["file"])
         self._flags_ui()
@@ -1656,7 +1680,7 @@ class GalleryPage(QWidget):
         manual = [c for c in folders.ordered(self.history.collections) if not c.get("smart")]
         for c in manual:
             inside = all(c["id"] in (e.get("cols") or []) for e in entries)
-            a = m.addAction(("      ↳ " if c.get("parent") else "") + c["name"])
+            a = m.addAction(_menu_name(self.history.collections, c))
             a.setCheckable(True)
             a.setChecked(inside)
             a.triggered.connect(lambda _=False, c=c, inside=inside: self.history.set_in_collection(
@@ -1711,7 +1735,7 @@ class GalleryPage(QWidget):
         """Stack number -> its pictures (a stack of one is no stack). Counted once per change."""
         if self._dup_cache is None:
             out = {}
-            for e in self.history.items:
+            for e in list(self.history.items) + (list(vault.entries) if vault.is_open() else []):
                 if e.get("dup"):
                     out.setdefault(e["dup"], []).append(e)
             self._dup_cache = {g: v for g, v in out.items() if len(v) > 1}
@@ -1734,7 +1758,14 @@ class GalleryPage(QWidget):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         for i, (e, (x, y, rw, rh)) in enumerate(zip(show, rects)):
-            pm = QPixmap(e.get("thumb") or e["file"])
+            if e.get("vault"):
+                pm = QPixmap()
+                try:
+                    pm.loadFromData(getattr(self, "_vdata", {}).get(e["id"]) or vault.read(e, "thumb_blob") or b"")
+                except Exception:
+                    pass
+            else:
+                pm = QPixmap(e.get("thumb") or e["file"])
             clip = QPainterPath()
             clip.addRoundedRect(QRectF(x, y, rw, rh), 22, 22)
             p.save()
@@ -1774,7 +1805,7 @@ class GalleryPage(QWidget):
     def _cached_icon(self, e, piled, groups):
         """Its picture if it is ready (or the vault's own way of making one), else None."""
         if e.get("vault"):
-            return self._vicon(e)
+            return self._stack_icon(e, len(groups[e["dup"]])) if piled else self._vicon(e)
         key = (("stack", e["id"], len(groups[e["dup"]]), self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("thumb"))
                if piled else (e["id"], self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("store"), e.get("thumb")))
         return self._icons.get(key)
@@ -1797,7 +1828,13 @@ class GalleryPage(QWidget):
     def _stack_icon(self, e, n):
         """Its normal tile on top of two more, with how many there are."""
         key = ("stack", e["id"], n, self.thumb, bool(e.get("fav")), bool(e.get("marked")), e.get("thumb"))
-        if key not in self._icons:
+        store = self._icons
+        if e.get("vault"):
+            # kept with the other decrypted vault tiles: in memory only, forgotten when the vault locks
+            self._vicon(e)
+            key += (e["id"] in self._vdata,)
+            store = self._vthumbs
+        if key not in store:
             s = self.thumb * 2
             out = QPixmap(s, s)
             out.fill(Qt.GlobalColor.transparent)
@@ -1823,8 +1860,8 @@ class GalleryPage(QWidget):
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, str(n))
             p.end()
             out.setDevicePixelRatio(2.0)
-            self._icons[key] = QIcon(out)
-        return self._icons[key]
+            store[key] = QIcon(out)
+        return store[key]
 
     def _forget_dups(self, *_a):
         self._dup_cache = None
@@ -1838,7 +1875,11 @@ class GalleryPage(QWidget):
         self.fill()
 
     def _keep(self, e):
-        self.history.update(e["id"], dup=None, dup_keep=True)
+        if e.get("vault"):
+            vault.update(e["id"], dup=None, dup_keep=True)
+            self._dup_cache = None
+        else:
+            self.history.update(e["id"], dup=None, dup_keep=True)
         self.fill()
         self._fill_nav()
 
@@ -1846,28 +1887,64 @@ class GalleryPage(QWidget):
         from . import dup
         if self._dup_busy:
             return
+        scope = self._dup_scope()
+        if not scope:
+            self.app.toast("Nothing here to look through.", "info")
+            return
         self._dup_busy = True
-        self.app.toast("Looking for pictures that look the same…", "info")
-        items = [e for e in self.history.items if not e.get("dup_keep")]
+        self.app.toast(f"Looking for look-alikes among {len(scope)} here…", "info")
+        items = [e for e in scope if not e.get("dup_keep")]
+        plain = [e for e in items if not e.get("vault")]
+        locked = [e for e in items if e.get("vault")]
+
+        def from_vault(e):
+            import io
+            return io.BytesIO(vault.read(e, "thumb_blob") or b"")
 
         def work():
+            res = []
             try:
-                res = dup.groups(items)
+                res = dup.groups(plain)
+                if locked:                      # vault ones only among themselves, read in memory only
+                    res += dup.groups(locked, load=from_vault)
             except Exception:
-                res = []
-            self._dups_found.emit(res)
+                pass
+            self._dups_found.emit((scope, res))
         threading.Thread(target=work, daemon=True).start()
 
-    def _got_dups(self, res):
+    def _dup_scope(self):
+        """What Find duplicates looks through: only what the place that is open holds (the album or sub-album, the
+        vault or one of its albums, a drive…). Duplicates: the gallery's stacks again (never the vault from there)."""
+        ventries = list(vault.entries) if vault.is_open() else []
+        if self.place == "dups":
+            return [e for e in self.history.items if e.get("dup")]
+        in_vault = self.place == "vault" or self.place.startswith("vcol:")
+        source = ventries if in_vault else list(self.history.items)
+        if self.place.startswith("store:") or self.place in ("fav", "marked"):
+            source = list(self.history.items) + ventries
+        return [e for e in source if self._in_place(e)]
+
+    def _got_dups(self, found):
         from . import dup
         self._dup_busy = False
-        for e in self.history.items:
-            if e.get("dup"):
+        scope, res = found
+        open_ = vault.is_open()
+        # what was looked through starts over; stacks elsewhere stay as they are
+        old = [e for e in scope if e.get("dup")]
+        for e in old:
+            if not e.get("vault"):
                 self.history.update(e["id"], dup=None)
+        if open_:
+            vault.update_many([e["id"] for e in old if e.get("vault")], dup=None)
         for pile in res:
             g = dup.new_id()
+            if pile[0].get("vault"):
+                if open_:
+                    vault.update_many([e["id"] for e in pile], dup=g)
+                continue
             for e in pile:
                 self.history.update(e["id"], dup=g)
+        self._dup_cache = None
         self.fill()
         self._fill_nav()
         n = len(res)
